@@ -1,0 +1,26 @@
+{
+  "include": ["src/**/*"],
+  "compilerOptions": {
+    "allowJs": true,
+    "outDir": "./dist",
+    "declaration": true,
+    "declarationDir": "./dist",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": false,
+    "inlineSourceMap": false,
+    "strict": true,
+    "strictNullChecks": true,
+    "noImplicitAny": true,
+    "moduleResolution": "node",
+    "module": "commonjs",
+    "noUnusedLocals": true,
+    "skipLibCheck": true,
+    "removeComments": true,
+    "lib": [ "ES2015" ],
+    "target": "ES2015",
+    "rootDirs": [ "./src" ],
+    "baseUrl": ".",
+    "paths": {}
+  }
+}
+
