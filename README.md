@@ -31,7 +31,7 @@ function map(doc) {
 
 In your **App**, you can retrieve the latest state for the user this way:
 ```js
-const user = await sSet.last("USERS", userId);
+const user = await sset.last("USERS", userId);
 ```
 
 Or right from Redis: `ZRANGE SSet:USERS/myUserId -1 -1` &rArr; Array of JSON-encoded users.
@@ -48,10 +48,14 @@ Clone the repo and install dependencies:
 
 Setup the environment variable so CouchDB finds the new query server.
 ```
-COUCHDB_QUERY_SERVER_SUPERCOUCH="/opt/supercouch/bin/supercouch"
+COUCHDB_QUERY_SERVER_SUPERCOUCH="/opt/supercouch/bin/supercouch --redis-url redis://redis.example.com:6379"
 ```
 
 This depends on your system, for a quick and dirty solution you can edit `/opt/couchdb/bin/couchdb` and add the environment variable next to others already in this file.
+
+By default, supercouch will connect to redis running on localhost port 6389
+
+Use `/opt/supercouch/bin/supercouch --help` for a list of options.
 
 ## Emit Commands
 
@@ -121,9 +125,14 @@ Total: **113 ms** (210x faster)
 
 ## Considerations
 
-This query server is not sandboxed! Everything is possible from the view functions. Production ready? Only if you trust the people writing map functions and that nobody can insert a design document in your DB. That is an open door for privilege escalation.
-
-The operations supported by the SSET are a subset of sorted-set operations, running them in any order give the same result.
+* This query server is not sandboxed! Everything is possible from the view functions. Production ready? Only if you trust the people writing map functions and that nobody can insert a design document in your DB. That is an open door for privilege escalation.
+* The operations supported by the SSET are a subset of sorted-set operations, running them in any order give the same result.
+* Emitting `SSET` operations is possible by using the `--emit-sset` flag when starting the supercouch query server. However this slows down view generation and uses resources. It might be used for debugging.
+* Deleted documents? They are not handled.
+  * For cleanup, you can use a prefix in the `database` field.
+  * Update the view to use a new prefix (it will be regenerated from scratch, omitting deleted documents).
+  * Update your app to access data from this prefix (better, store the "live" prefix in Redis, no app reload is needed).
+  * Flush all data from "SSet:OldPrefix*".
 
 ## License
 
