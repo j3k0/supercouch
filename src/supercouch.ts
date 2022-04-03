@@ -31,7 +31,7 @@ let sSetDB: SSetDB;
 let emitSSet: boolean = false;
 
 function usage() {
-  console.error('Usage: node query-server.js --redis-url redis://localhost:6379 [--emit-sset]');
+  console.error('Usage: node supercouch.js --redis-url redis://localhost:6379 [--emit-sset]');
   console.error();
   console.error(' --emit-sset ......... Emit the $SSET entries to the view. Serves as a backup to rebuild the redis database.');
   console.error(' --redis-url [URL] ... Set the URL to connect to Redis.');
@@ -52,6 +52,7 @@ async function main(argv: string[]) {
       emitSSet = true;
     }
     else if (argv[i] === '--help') {
+      console.error('HELP');
       usage();
     }
     else {
@@ -158,7 +159,9 @@ async function processQuery(line: any[]): Promise<any> {
     }
   }
   catch (uErr) {
-    const err = uErr as any;
+    const err = uErr as unknown as Error;
+    if (err.message) console.error(err.message);
+    if (err.stack) console.error(err.stack);
     return ["error", "processing_failed", 'message' in err ? err.message : 'unknown message'];
   }
 }
@@ -178,7 +181,7 @@ global.emit = function (key, value) {
 }
 
 function dlog(str: string) {
-  console.error('[relaxjs@' + new Date().toISOString() + '] ' + str);
+  console.error('[supercouch@' + new Date().toISOString() + '] ' + str);
 }
 
 global.log = function (str) {
@@ -202,11 +205,12 @@ async function mapDoc(map: Function, doc: object) {
       if (marker === SSET_KEY) {
         const value = kv[1];
         const id = idScore.slice(0, idScore.length - 1);
-        const score = idScore[idScore.length - 1];
+        const sscore = idScore[idScore.length - 1];
+        const score = typeof sscore === 'number' ? sscore : parseFloat(sscore);
         if (emitSSet) {
           ret.push(kv);
         }
-        ops.push({ type: type as unknown as SSetOpType, db, id, score: parseFloat(score), value });
+        ops.push({ type: type as unknown as SSetOpType, db, id, score, value });
       }
       else {
         ret.push(kv);
