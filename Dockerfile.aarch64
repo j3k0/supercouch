@@ -1,0 +1,46 @@
+# A couchdb server with the relaxjs extension installed
+
+# Check dockerhub for the latest
+FROM apache/couchdb:3.2.1
+
+# Check nodejs.org for the latest
+ARG NODE_VERSION=v16.14.2
+
+# For aarch64, we use arm64
+# For x86_64, we use x64
+ARG NODE_ARCH=arm64
+
+# Install GCC
+RUN \
+  apt-get update \
+  && apt-get install -y \
+    gcc \
+  && rm -fr /var/lib/apt/lists/* /var/lib/dpkg/info/*
+
+# Instal NodeJS
+RUN \
+  curl https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-${NODE_ARCH}.tar.gz -o /node.tar.gz \
+  && cd / \
+  && tar xzf node.tar.gz \
+  && rm -fr node.tar.gz \
+  && mv node-* /opt/node \
+  && mkdir -p /opt/relaxjs
+
+ENV PATH=/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Build RelaxJS
+COPY package.json package-lock.json /opt/relaxjs/
+RUN cd /opt/relaxjs && /opt/node/bin/npm install
+
+COPY bin /opt/relaxjs/bin
+COPY tsconfig.json /opt/relaxjs/tsconfig.json
+COPY src /opt/relaxjs/src
+
+RUN cd /opt/relaxjs/ && /opt/node/bin/npm run build
+
+# Define how to connect to the relax.sset database
+ENV REDIS_RELAX_SSET_URL="redis://redis:6379"
+
+# Defined relaxjs as the queryserver for "relaxjs" files.
+ENV COUCHDB_QUERY_SERVER_RELAXJS="/opt/relaxjs/bin/relaxjs"
+

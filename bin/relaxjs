@@ -1,0 +1,3 @@
+#!/bin/bash
+cd "$(dirname "$0")/.."
+/opt/node/bin/node -r source-map-support/register -r module-alias/register build/relaxjs.js --redis-url "$REDIS_RELAX_SSET_URL"

@@ -1,0 +1,29 @@
+{
+  "include": ["src/**/*"],
+  "compilerOptions": {
+    "noErrorTruncation": true,
+    "module": "CommonJS",
+    "composite": false,
+    "allowJs": true,
+    "outDir": "build",
+    "declaration": false,
+    "esModuleInterop": true,
+    "moduleResolution": "node",
+    "allowSyntheticDefaultImports": true,
+    "inlineSourceMap": true,
+    "strict": true,
+    "strictNullChecks": true,
+    "noImplicitAny": false,
+    "noUnusedLocals": true,
+    "skipLibCheck": true,
+    "removeComments": false,
+    "lib": [ "ES2015", "ES2019", "ESNext", "ES2021" ],
+    "target": "es2019",
+    "rootDirs": [ "./src" ],
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "src/*": [ "./src/*" ]
+    }
+  }
+}

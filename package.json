@@ -1,0 +1,21 @@
+{
+  "name": "relaxjs",
+  "version": "1.0.0",
+  "description": "CouchDB Query Server with an SSet Database (cf relax.sset)",
+  "main": "build/relaxjs.js",
+  "scripts": {
+    "start": "node -r source-map-support/register -r module-alias/register build/relaxjs.js",
+    "build": "tsc",
+    "buildw": "tsc -w"
+  },
+  "author": "Jean-Christophe Hoelt <hoelt@fovea.cc>",
+  "license": "MIT",
+  "dependencies": {
+    "@types/node": "^17.0.23",
+    "module-alias": "^2.2.2",
+    "redis": "^4.0.4",
+    "relax.sset": "^0.1.0",
+    "source-map-support": "^0.5.21",
+    "typescript": "^4.6.2"
+  }
+}
