@@ -1,10 +1,10 @@
 {
-  "name": "relaxjs",
+  "name": "supercouch",
   "version": "1.0.0",
   "description": "CouchDB Query Server with an SSet Database (cf relax.sset)",
-  "main": "build/relaxjs.js",
+  "main": "build/supercouch.js",
   "scripts": {
-    "start": "node -r source-map-support/register -r module-alias/register build/relaxjs.js",
+    "start": "node -r source-map-support/register -r module-alias/register build/supercouch.js",
     "build": "tsc",
     "buildw": "tsc -w"
   },

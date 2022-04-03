@@ -1,4 +1,4 @@
-# A couchdb server with the relaxjs extension installed
+# A couchdb server with the supercouch extension installed
 
 # Check dockerhub for the latest
 FROM apache/couchdb:3.2.1
@@ -24,23 +24,23 @@ RUN \
   && tar xzf node.tar.gz \
   && rm -fr node.tar.gz \
   && mv node-* /opt/node \
-  && mkdir -p /opt/relaxjs
+  && mkdir -p /opt/supercouch
 
 ENV PATH=/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-# Build RelaxJS
-COPY package.json package-lock.json /opt/relaxjs/
-RUN cd /opt/relaxjs && /opt/node/bin/npm install
+# Build supercouch
+COPY package.json package-lock.json /opt/supercouch/
+RUN cd /opt/supercouch && /opt/node/bin/npm install
 
-COPY bin /opt/relaxjs/bin
-COPY tsconfig.json /opt/relaxjs/tsconfig.json
-COPY src /opt/relaxjs/src
+COPY bin /opt/supercouch/bin
+COPY tsconfig.json /opt/supercouch/tsconfig.json
+COPY src /opt/supercouch/src
 
-RUN cd /opt/relaxjs/ && /opt/node/bin/npm run build
+RUN cd /opt/supercouch/ && /opt/node/bin/npm run build
 
 # Define how to connect to the relax.sset database
 ENV REDIS_RELAX_SSET_URL="redis://redis:6379"
 
-# Defined relaxjs as the queryserver for "relaxjs" files.
-ENV COUCHDB_QUERY_SERVER_RELAXJS="/opt/relaxjs/bin/relaxjs"
+# Defined supercouch as the queryserver for "supercouch" files.
+ENV COUCHDB_QUERY_SERVER_SUPERCOUCH="/opt/supercouch/bin/supercouch"
 
