@@ -28,9 +28,14 @@ let mapFunctions: {
 
 let state: QueryServerState = {}; state;
 let sSetDB: SSetDB;
+let emitSSet: boolean = false;
 
 function usage() {
-  console.error('Usage: node query-server.js --redis-url redis://localhost:6379');
+  console.error('Usage: node query-server.js --redis-url redis://localhost:6379 [--emit-sset]');
+  console.error();
+  console.error(' --emit-sset ......... Emit the $SSET entries to the view. Serves as a backup to rebuild the redis database.');
+  console.error(' --redis-url [URL] ... Set the URL to connect to Redis.');
+  console.error();
   process.exit(1);
 }
 
@@ -42,6 +47,9 @@ async function main(argv: string[]) {
     if (argv[i] === '--redis-url') {
       redisURL = argv[i + 1];
       ++i;
+    }
+    else if (argv[i] === '--emit-sset') {
+      emitSSet = true;
     }
     else if (argv[i] === '--help') {
       usage();
@@ -181,27 +189,35 @@ global.log = function (str) {
 async function mapDoc(map: Function, doc: object) {
 
   map(doc);
-  const ret = emits;
-  emits = [];
-
+  const ret: any[] = [];
   const ops: SSetOps = new SSetOps();
 
   // Extract and process $SSET emits.
   //
   // They are formatted this way:
   // [["$SSET", <db>, <id>..., score],value]
-  for (const kv of ret) {
+  for (const kv of emits) {
     if (kv?.[0]?.length >= 4 && typeof kv[0][0] === 'string') {
       const [marker, db, type, ...idScore] = kv[0] as string[];
       if (marker === SSET_KEY) {
         const value = kv[1];
         const id = idScore.slice(0, idScore.length - 1);
         const score = idScore[idScore.length - 1];
+        if (emitSSet) {
+          ret.push(kv);
+        }
         ops.push({ type: type as unknown as SSetOpType, db, id, score: parseFloat(score), value });
       }
+      else {
+        ret.push(kv);
+      }
     }
-    // NOTE: we could filter out the $SSET documents? But they serve as a nice backup for redis.
+    else {
+      ret.push(kv);
+    }
   }
+
+  emits = [];
   await ops.process(sSetDB);
   return ret;
 }
