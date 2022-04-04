@@ -29,17 +29,17 @@ export class SSetRedis implements SSetDB {
       if (!op.id || !op.id.length || !op.keep)
         throw new Error('Invalid $SSET operation for ' + JSON.stringify(op));
     }
-    const multi = this.redisClient.multi();
+    let multi = this.redisClient.multi();
     for (let op of ops) {
       const key = SSetRedis.key(op.db, op.id);
       const score = op.score;
       const value = JSON.stringify(op.value);
-      multi.zAdd(key, { score, value }, { 'GT': true });
+      multi = multi.zAdd(key, { score, value }, { 'GT': true });
       switch (op.keep) {
         case "ALL_VALUES":
           break;
         case "LAST_VALUE":
-          multi.zRemRangeByRank(key, 0, -2);
+          multi = multi.zRemRangeByRank(key, 0, -2);
           break;
         default:
           // In case the user gives a wrong value for keep
