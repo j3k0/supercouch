@@ -24,17 +24,51 @@ export function supercouch<D>(db: nano.DocumentScope<D>, config: SuperCouchConfi
   const db_view = db.view.bind(db);
 
   // Extended version of nano's db.view method
-  (db as any).view = async function view<V>(ddoc: string, viewName: string, params: nano.DocumentViewParams, callback?: nano.Callback<nano.DocumentViewResponse<V, D>>): Promise<nano.DocumentViewResponse<V, D>> {
+  (db as any).view = async function view<V>(ddoc: string, viewName: string, params: nano.DocumentViewParams, callback?: nano.Callback<nano.DocumentViewResponse<V, D>>): Promise<nano.DocumentViewResponse<V, D> | undefined> {
 
     // Check if it's a supercouch query and process it
     const type = getQueryType(params);
     switch (type) {
-      case 'keys':
-        return processKeysQuery<V, D>(sSetDB, params.keys as string[][]);
-        break;
-      case 'range':
-        return processRangeQuery<V, D>(sSetDB, params.startkey || params.start_key, params.endkey || params.end_key, params.skip, params.limit);
-        break;
+      case 'keys': {
+        try {
+          const response = await processKeysQuery<V, D>(sSetDB, params.keys as string[][]);
+          if (callback) process.nextTick(() => callback(null, response));
+          return response;
+        }
+        catch (e) {
+          const requestError: nano.RequestError = new Error('SuperCouch.SSet Failed: ' + (e as any).message);
+          requestError.name = 'supercouch_error';
+          requestError.reason = 'keys_query_failed';
+          requestError.statusCode = 500;
+          if (e instanceof Error) {
+            requestError.stack = e.stack;
+          }
+          if (callback)
+            process.nextTick(() => callback(requestError, {} as nano.DocumentViewResponse<V, D>));
+          else
+            throw requestError;
+        }
+      } break;
+      case 'range': {
+        try {
+          const response = await processRangeQuery<V, D>(sSetDB, params.startkey || params.start_key, params.endkey || params.end_key, params.skip, params.limit);
+          if (callback) process.nextTick(() => callback(null, response));
+          return response;
+        }
+        catch (e) {
+          const requestError: nano.RequestError = new Error('SuperCouch.SSet Failed: ' + (e as any).message);
+          requestError.name = 'supercouch_error';
+          requestError.reason = 'range_query_failed';
+          requestError.statusCode = 500;
+          if (e instanceof Error) {
+            requestError.stack = e.stack;
+          }
+          if (callback)
+            process.nextTick(() => callback(requestError, {} as nano.DocumentViewResponse<V, D>));
+          else
+            throw requestError;
+        }
+      } break;
       default:
         return db_view<V>(ddoc, viewName, params, callback);
     }

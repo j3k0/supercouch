@@ -1,6 +1,6 @@
 {
   "name": "supercouch.nano",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Extends apache/couchdb-nano with SuperCouch power",
   "main": "dist/index.js",
   "types": "./dist/index.d.ts",
@@ -15,12 +15,17 @@
   },
   "author": "Jean-Christophe Hoelt <hoelt@fovea.cc>",
   "license": "MIT",
+  "peerDependencies": {
+    "nano": "*",
+    "redis": "*"
+  },
   "dependencies": {
-    "nano": "^10.0.0",
     "supercouch.sset": "^0.5.1",
     "supercouch.sset.redis": "^0.5.1"
   },
   "devDependencies": {
-    "typescript": "^4.6.3"
+    "typescript": "^4.6.3",
+    "nano": "*",
+    "redis": "*"
   }
 }
