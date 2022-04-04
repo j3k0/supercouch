@@ -1,65 +1,55 @@
-import { SSetDB, SSetOp, SSetOpType, SSetRangeQuery, SSetRangeResponse } from "supercouch.sset";
+import { SSetDB, SSetOp, SSetRangeQuery, SSetRangeResponse } from "supercouch.sset";
 import * as redis from "redis";
 
+/** Convenience method to create a redis client and wait for connection */
 export async function prepareRedisClient(url: string): Promise<redis.RedisClientType> {
   const client: redis.RedisClientType = redis.createClient({ url });
   await client.connect();
   return client;
 }
 
+/** A SuperCouch Sorted Database implemented with Redis */
 export class SSetRedis implements SSetDB {
 
+  /** Our link with redis */
   private redisClient: redis.RedisClientType;
 
   constructor(redisClient: redis.RedisClientType) {
     this.redisClient = redisClient;
   }
 
+  /** Format the Redis keys */
   static key(db: string, key: string[]): string {
-    return 'SSet:' + db + '/' + key.map(encodeURIComponent).join(':');
+    return 'SSET:' + db + '/' + key.map(encodeURIComponent).join(':');
   }
 
-  process<T>(op: SSetOp<T>): Promise<any> {
-    if (!op.id || !op.id.length || !op.type)
-      throw new Error('Invalid $SSET operation: ' + op.type);
-    const key = SSetRedis.key(op.db, op.id);
-    const score = op.score;
-    const value = JSON.stringify(op.value);
-    switch (op.type) {
-      case SSetOpType.ADD:
-        return this.redisClient.zAdd(key, { score, value }, { 'GT': true });
-      case SSetOpType.KEEP_LAST:
-        return Promise.all([
-          this.redisClient.zAdd(key, { score, value }, { 'GT': true }), // only update if order is greater that existing
-          this.redisClient.zRemRangeByRank(key, 0, -2),
-        ]);
-      case SSetOpType.INSERT:
-        return this.redisClient.zAdd(key, { score, value }, { 'LT': true });
-      case SSetOpType.KEEP_FIRST:
-        return Promise.all([
-          this.redisClient.zAdd(key, { score, value }, { 'LT': true }), // only update if order is lower that existing
-          this.redisClient.zRemRangeByRank(key, 1, -1),
-        ]);
+  /** @inheritdoc */
+  process<T>(ops: SSetOp<T>[]): Promise<any> {
+    for (let op of ops) {
+      if (!op.id || !op.id.length || !op.keep)
+        throw new Error('Invalid $SSET operation for ' + JSON.stringify(op));
     }
-    // In case the user gives a wrong type
-    throw new Error('Unsupported $SSET operation: ' + op.type);
+    const multi = this.redisClient.multi();
+    for (let op of ops) {
+      const key = SSetRedis.key(op.db, op.id);
+      const score = op.score;
+      const value = JSON.stringify(op.value);
+      multi.zAdd(key, { score, value }, { 'GT': true });
+      switch (op.keep) {
+        case "ALL_VALUES":
+          break;
+        case "LAST_VALUE":
+          multi.zRemRangeByRank(key, 0, -2);
+          break;
+        default:
+          // In case the user gives a wrong value for keep
+          throw new Error('Unsupported value for $SSET "keep" field: ' + op.keep);
+      }
+    }
+    return multi.exec();
   }
 
-  first<T>(db: string, id: string[]) {
-    return this.at<T>(db, id, 0);
-  }
-
-  last<T>(db: string, id: string[]) {
-    return this.at<T>(db, id, -1);
-  }
-
-  private async at<T>(db: string, id: string[], index: number): Promise<T | null> {
-    const values = await this.rangeByIndex<T>(db, id, { min: index, max: index, count: 1 });
-    if (values.rows.length) return values.rows[0];
-    return null;
-  }
-
-  async rangeBy<T>(by: 'SCORE' | 'INDEX', db: string, id: string[], query: SSetRangeQuery): Promise<SSetRangeResponse<T>> {
+  private async rangeBy<T>(by: 'SCORE' | 'INDEX', db: string, id: string[], query: SSetRangeQuery): Promise<SSetRangeResponse<T>> {
     const key = SSetRedis.key(db, id);
     const isReversed = (query.order === 'desc' && by === 'SCORE');
     const [min, max] = isReversed ? [query.max, query.min] : [query.min, query.max];
@@ -92,40 +82,13 @@ export class SSetRedis implements SSetDB {
     }
   }
 
+  /** @inheritdoc */
   rangeByScore<T>(db: string, id: string[], query: SSetRangeQuery): Promise<SSetRangeResponse<T>> {
     return this.rangeBy('SCORE', db, id, query);
   }
 
+  /** @inheritdoc */
   rangeByIndex<T>(db: string, id: string[], query: SSetRangeQuery): Promise<SSetRangeResponse<T>> {
     return this.rangeBy('INDEX', db, id, query);
   }
-  /*
-  async rangeByDate<T>(key: string[], query: IndexByDateQuery): Promise<Paginated<T>> {
-    const strKey = EntitiesDB.redisKey(key);
-    const min = +new Date(query.startdate || 0);
-    const max = +new Date(query.enddate || '9999-12-31T00:00:00.000Z');
-    const skip = query.skip || 0;
-    const limit = query.limit || 9999999999;
-
-    const [rows, total] = await Promise.all([
-      this.redisClient.zRange(strKey,
-        query.order === 'asc' ? min : max,
-        query.order === 'asc' ? max : min, {
-        REV: query.order === 'desc' ? true : undefined,
-        BY: 'SCORE',
-        LIMIT: {
-          offset: skip,
-          count: limit,
-        }
-      }),
-      query.includeTotal
-        ? (this.redisClient.zCount(strKey, min, max))
-        : new Promise<number>(resolve => resolve(-1)),
-    ]);
-    return {
-      paging: { skip, limit, total },
-      rows: rows.map(function (str: string): T { return JSON.parse(str) as T })
-    };
-  }
-  */
 }
