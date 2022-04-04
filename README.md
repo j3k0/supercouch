@@ -1,40 +1,86 @@
 # SuperCouch
 
-Extends CouchDB with a fast in-memory Sorted Set datatype.
-
-Only Redis at the moment, but it's meant to be extensible.
+Write CouchDB views to Redis with Sorted Sets.
 
 ## Why? Who is this for?
 
-In our use company, we are using CouchDB as the source of truth, in form of an event store. From events, we extract state information about a various types of entities. This is done in a view.
+Fast, stateful views.
 
-Extracting the latest state of an entity with CouchDB is easy, it's just a custom reduce function that reduces all states to the one.
+SuperCouch is targeted toward CouchDB users that reach the limits of what can be done with CouchDB views while maintaining acceptable performance.
 
-Unfortunately, it's both slow at generating, slow to query in batch and wastes a ton of resource (because the view contains every historical states of an entity, even if we only need the latest one).
+## Background
 
-Here comes SuperCouch, and CouchDB Query Server that let's you emit data to a stateful database.
+In our [company's product](https://billing.fovea.cc/), we use CouchDB as the source of truth in form of an events store. From events, we extract state information about a various types of entities. This is used to be done by a worker using the `_change` feed, but became a source of problems especially with unwanted rewinds happening regularly (when upgrading nodes, resharding, network issues, ...). Processing the whole DB isn't realistic as it would take months.
 
-It's targeted toward CouchDB users that reach the limits of certain aspects of CouchDB.
+Plan B was to do the heavy lifting with complex CouchDB map/reduce views. The implementation was straightforward, map extract entities states, a custom reduce function reduces all historical states to the final one. CouchDB will handle rebuilding the view and this should scale horizontally (views are build in parallel in each shard, instead of sequentially on the whole DB with the `_change` feed).
+
+Unfortunately, the result was slow at generating, slow to query in batch and wastes a ton of resource: the view contains every historical states of all entities, even if we really only need the final one (in most cases).
+
+Our solution was SuperCouch, a CouchDB Query Server that let's you emit data to a stateful database.
+
+## Design
+
+The goal of SuperCouch is to feel like a CouchDB native extension to views:
+
+* Adding data is done using `emit()` with specially formatted keys and values.
+  * Handled by a custom query server.
+* Accessing data is done using standard view requests on those keys, with constraints.
+  * Either by overloading client libraries.
+  * At some stage, by deploying a custom http proxy for instant compatibility with all clients libs without modification.
+
 
 ## Usage
 
 **Server-side**, it's a custom query server: install it and point CouchDB to use it, either as your default javascript query server or as a custom additional "language". Section below will detail how to add SuperCouch to your server(s).
 
-In your **CouchDB View**, you can now emit specially formatted documents that end up in the fast database. For example:
+In your **CouchDB View**, you can now emit specially formatted documents that end up in the fast database. Set your view language to "supercouch" then, for example:
 ```js
 function map(doc) {
-  // Store the last state of the user
-  if (doc.user && doc.date)
-    emit(["$SSET", "USERS", "KEEP_LAST", user.id, +new Date(doc.date)], doc.user);
+  if (doc.user && doc.date) {
+    const timestamp = +new Date(doc.date);
+    // Store the last state of the user
+    emit(["$SSET", "Users", doc.user.id], {
+      score: timestamp,
+      value: doc.user,
+      keep: "LAST_VALUE",
+    });
+
+    // Index users by date (stores the last date for each user id)
+    emit(["$SSET", "UsersIndex", "ByDate"], {
+      score: timestamp,
+      value: doc.user.id,
+      keep: "ALL_VALUES", // this is by default
+    });
+
+    doc.user.friends.forEach(friendId => {
+      emit(["$SSET", "UsersFriends", doc.user.id], {
+        score: timestamp,
+        value: friendId,
+      });
+    });
+  }
 }
 ```
 
 In your **App**, you can retrieve the latest state for the user this way:
 ```js
-const user = await sset.last("USERS", userId);
+// Retrieve the list of users that logged-in in the last hour
+const userIds = await nano.view("design", "view", {
+  // Key is 3 levels deep, 4th level is the min and max scores.
+  group: true, group_level: 3,
+  start_key: ["$SSET", "UsersIndex", "ByDate", +new Date() - 3600000],
+  end_key: ["$SSET", "UsersIndex", "ByDate", +new Date()],
+});
+
+// Retrieve the last state for each user.
+const users = await nano.view("design", "view", {
+  keys: ["$SSET","Users","bob33"], ["$SSET","USERS","alice202"],
+}));
 ```
 
-Or right from Redis: `ZRANGE SSet:USERS/myUserId -1 -1` &rArr; Array of JSON-encoded users.
+Or the equivalent right from Redis:
+ * `ZRANGE SSET:Users/myUserId -1 -1` &rArr; Array of JSON-encoded users.
+ * `ZRANGE SSET:UsersIndex/ByDate 1649052410191 1649056002596 BYSCORE` &rArr; Array of JSON-encoded users.
 
 ## Installing
 
@@ -59,46 +105,28 @@ Use `/opt/supercouch/bin/supercouch --help` for a list of options.
 
 ## Emit Commands
 
-### KEEP_LAST
+### $SSET
 
-Add the element only if its score is the largest in the whole set. Keep only 1 element in the set.
+Add an element to a Sorted Set, if its value is larger that the existing one for this element.
 
-usage: `emit(["$SSET", database, "KEEP_LAST", id..., score], doc)`
-
- * `database` `[string]` - Group entries by database.
- * `id` `[string, ...]` - An array of strings.
- * `score` `[number]` - Sorting order for this element.
- * `doc` `[any]` - Entity to store.
-
-This is useful for example for keeping the last known state of an entity, by using a timestamp for the score.
-
-### ADD
-
-Add an element to the set.
-
-If an document with the exact same value exists, the score is updated from the largest one.
-
-This will keep 1 entry for each document.
-
-usage: `emit(["$SSET", database, "ADD", id..., score], doc)`
+usage: `emit(["$SSET", database, id...], { keep: "LAST_VALUE", score, value })`
 
  * `database` `[string]` - Group entries by database.
  * `id` `[string, ...]` - An array of strings.
  * `score` `[number]` - Sorting order for this element.
- * `doc` `[any]` - Entity to store.
-
-This is useful for creating an index, sorted by date for example:
+ * `value` `[any]` - Entity to store.
+ * `keep` `["LAST_VALUE" | "ALL_VALUES"]` - Keep only 1 element in the whole set, or 1 element of each value.
+   * `keep: "LAST_VALUE"` is useful for example for keeping the last known state of an entity, by using a timestamp for the score.
+   * `keep: "ALL_VALUES"` is is useful for creating indices, sorted by date for example.
 
 Example:
 ```js
-emit(emit(["$SSET", "BY_DATE", "ADD", "SignUp", +new Date(doc.user.lastLogin), doc.user.id)`
+emit(["$SSET", "Users", "SignUp", "ByDate"], {
+  score: +new Date(doc.user.signUpDate),
+  value: doc.user.id,
+  keep: "ALL_VALUES",
+})
 ```
-
-Creates an index of users ordered by Sign Up date.
-
-### KEEP_FIRST, INSERT
-
-Same as `KEEP_LAST` and `ADD`, but reversed (keeping the first value and the lowest score).
 
 ## Benchmarks
 
@@ -125,14 +153,19 @@ Total: **113 ms** (210x faster)
 
 ## Considerations
 
-* This query server is not sandboxed! Everything is possible from the view functions. Production ready? Only if you trust the people writing map functions and that nobody can insert a design document in your DB. That is an open door for privilege escalation.
+* This query server is not sandboxed! Everything is possible from the view functions. Production ready? Only if you trust the people writing map functions and that nobody can insert a design document in your DB. This is an open door for privilege escalation.
 * The operations supported by the SSET are a subset of sorted-set operations, running them in any order give the same result.
-* Emitting `SSET` operations is possible by using the `--emit-sset` flag when starting the supercouch query server. However this slows down view generation and uses resources. It might be used for debugging.
+* Emitting `SSET` operations to the CouchDB view is possible by providing the `--emit-sset` flag to the supercouch query server. This slows down view generation and uses disk resources. It can be useful for debugging.
 * Deleted documents? They are not handled.
-  * For cleanup, you can use a prefix in the `database` field.
-  * Update the view to use a new prefix (it will be regenerated from scratch, omitting deleted documents).
-  * Update your app to access data from this prefix (better, store the "live" prefix in Redis, no app reload is needed).
-  * Flush all data from "SSet:OldPrefix*".
+  * For cleanup, use the `database` field (or a prefix).
+  * Update the view to use a new prefix, it will be regenerated from scratch, so without processing the content of deleted documents.
+  * Update your app to access data using this prefix. Ideally, store the "live" prefix in Redis, so no app reload is needed.
+  * Flush all data from "SSET:OldPrefix*".
+* While supercouch only supports Redis, it's meant to be extensible.
+
+## Limitation
+
+SuperCouch does not support custom reduce functions.
 
 ## License
 

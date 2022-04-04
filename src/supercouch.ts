@@ -1,7 +1,8 @@
 import * as readline from 'node:readline';
 import { stdin, stdout } from 'node:process';
 import { writeFileSync } from 'node:fs';
-import { prepareRedisClient, SSetDB, SSetOps, SSetOpType, SSetRedis } from 'relax.sset';
+import { SSetDB, SSetKeepOption, SSetOp } from 'supercouch.sset';
+import { prepareRedisClient, SSetRedis } from 'supercouch.sset.redis';
 import { md5 } from './md5';
 
 const SSET_KEY = '$SSET';
@@ -28,7 +29,6 @@ let mapFunctions: {
 
 let state: QueryServerState = {}; state;
 let sSetDB: SSetDB;
-let emitSSet: boolean = false;
 
 function usage() {
   console.error('Usage: node supercouch.js --redis-url redis://localhost:6379 [--emit-sset]');
@@ -39,17 +39,24 @@ function usage() {
   process.exit(1);
 }
 
-/** Entry point */
-async function main(argv: string[]) {
+type Configuration = {
+  emitSSet: boolean;
+  redisURL: string;
+};
+let config: Configuration;
 
-  let redisURL = '';
+function parseArguments(argv: string[]): Configuration {
+  const ret: Configuration = {
+    emitSSet: false,
+    redisURL: '',
+  }
   for (let i = 2; i < argv.length; ++i) {
     if (argv[i] === '--redis-url') {
-      redisURL = argv[i + 1];
+      ret.redisURL = argv[i + 1];
       ++i;
     }
     else if (argv[i] === '--emit-sset') {
-      emitSSet = true;
+      ret.emitSSet = true;
     }
     else if (argv[i] === '--help') {
       console.error('HELP');
@@ -60,9 +67,19 @@ async function main(argv: string[]) {
       usage();
     }
   }
+  return ret;
+}
 
-  if (!redisURL) usage();
-  sSetDB = new SSetRedis(await prepareRedisClient(redisURL));
+/** Entry point */
+async function main(argv: string[]) {
+
+  config = parseArguments(argv);
+  if (config.redisURL) {
+    sSetDB = new SSetRedis(await prepareRedisClient(config.redisURL));
+  }
+  else {
+    usage();
+  }
 
   const pipe = readline.createInterface({ input: stdin, output: stdout });
   pipe.on("line", async function lineReceived(input: string): Promise<void> {
@@ -100,7 +117,7 @@ async function processQuery(line: any[]): Promise<any> {
 
       case 'map_doc':
         if (!mapFunctions) return [];
-        const obj:object = line[1];
+        const obj: object = line[1];
         // const promises = mapFunctions.map(fn => mapDoc(fn.map, obj));
         // return await Promise.all(promises);
         const ret: any[] = [];
@@ -110,15 +127,15 @@ async function processQuery(line: any[]): Promise<any> {
         return ret; //[await mapDoc(mapFunctions[0].map, obj)];
 
       case 'reduce': {
-        const funs: string[] = line[1];
+        const functions: string[] = line[1];
         const docs: EmitDoc[] = line[2];
-        return [true, funs.map(fn => reduceDocs(fn, docs))];
+        return [true, functions.map(fn => reduceDocs(fn, docs))];
       }
 
       case 'rereduce': {
-        const funs: string[] = line[1];
+        const functions: string[] = line[1];
         const docs: any[] = line[2];
-        return [true, funs.map(fn => reReduceDocs(fn, docs))];
+        return [true, functions.map(fn => reReduceDocs(fn, docs))];
       }
 
       case 'reset':
@@ -135,13 +152,7 @@ async function processQuery(line: any[]): Promise<any> {
       case 'add_fun':
         // in principle, there could be multiple map functions. we just support one here.
         // if (!mapFunctions) mapFunctions = [];
-        const code = line[1].replace(/^[ \t\n]*function[ \t\n]+map[ \t\n]*\(/, 'module.exports.map = function map(');
-        const filename = '/tmp/qs_' + process.pid + '_' + md5(code) + '.js';
-        writeFileSync(filename, code);
-        mapFunctions.push({
-          filename,
-          map: require(filename).map,
-        });
+        mapFunctions.push(registerFunction(line[1]));
         return true;
 
       case 'ddoc': return true; // not caching anything!
@@ -166,6 +177,20 @@ async function processQuery(line: any[]): Promise<any> {
   }
 }
 
+const functions: { [hash: string]: { filename: string; map: Function } } = {}
+
+function registerFunction(str: string) {
+  const hash = md5(str);
+  if (functions[hash]) return functions[hash];
+  const code = str.replace(/^[ \t\n]*function[ \t\n]+map[ \t\n]*\(/, 'module.exports.map = function map(');
+  const filename = '/tmp/qs_' + process.pid + '_' + hash + '.js';
+  writeFileSync(filename, code);
+  return functions[hash] = {
+    filename,
+    map: require(filename).map,
+  };
+}
+
 let emits: any[] = [];
 
 global.emit = function (key, value) {
@@ -180,12 +205,12 @@ global.emit = function (key, value) {
     emits.push([key, value]);
 }
 
-function dlog(str: string) {
-  console.error('[supercouch@' + new Date().toISOString() + '] ' + str);
+function debugLog(str: string) {
+  console.error('[SuperCouch@' + new Date().toISOString() + '] ' + str);
 }
 
 global.log = function (str) {
-  dlog(str);
+  debugLog(str);
   console.log(JSON.stringify(["log", str]));
 }
 
@@ -193,46 +218,41 @@ async function mapDoc(map: Function, doc: object) {
 
   map(doc);
   const ret: any[] = [];
-  const ops: SSetOps = new SSetOps();
+  const ops: SSetOp<any>[] = [];
 
   // Extract and process $SSET emits.
   //
   // They are formatted this way:
-  // [["$SSET", <db>, <id>..., score],value]
+  // [["$SSET", <db>, <id>...],{keep, score, value}]
   for (const kv of emits) {
-    if (kv?.[0]?.length >= 4 && typeof kv[0][0] === 'string') {
-      const [marker, db, type, ...idScore] = kv[0] as string[];
-      if (marker === SSET_KEY) {
-        const value = kv[1];
-        const id = idScore.slice(0, idScore.length - 1);
-        const sscore = idScore[idScore.length - 1];
-        const score = typeof sscore === 'number' ? sscore : parseFloat(sscore);
-        if (emitSSet) {
-          ret.push(kv);
+    let shouldEmit = true;
+    if (kv?.[0]?.length >= 3 && typeof kv[0][0] === 'string') {
+      const [marker, db, ...id] = kv[0] as string[];
+      if (marker === SSET_KEY && typeof kv[1] === 'object') {
+        const { value, score, keep } = kv[1];
+        if (keep && db && id && typeof score === 'number') {
+          ops.push({ keep: keep as unknown as SSetKeepOption, db, id, score, value });
+          shouldEmit = config.emitSSet;
         }
-        ops.push({ type: type as unknown as SSetOpType, db, id, score, value });
-      }
-      else {
-        ret.push(kv);
       }
     }
-    else {
+    if (shouldEmit)
       ret.push(kv);
-    }
   }
 
   emits = [];
-  await ops.process(sSetDB);
+  await sSetDB.process(ops);
   return ret;
 }
 
 function reduceDocs(fn: string, docs: EmitDoc[]): any {
+  // TODO: this is unsupported
   return null;
 }
 
 function reReduceDocs(fn: string, docs: any[]): any {
+  // TODO: this is unsupported
   return null;
 }
 
 main(process.argv);
-

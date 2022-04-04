@@ -16,6 +16,8 @@
     "redis": "^4.0.4",
     "relax.sset": "^0.1.0",
     "source-map-support": "^0.5.21",
+    "supercouch.sset": "^0.5.1",
+    "supercouch.sset.redis": "^0.5.1",
     "typescript": "^4.6.2"
   }
 }
