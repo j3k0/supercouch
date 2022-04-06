@@ -7,6 +7,19 @@ export type SuperCouchConfig = {
   redisClient?: RedisClientType;
 }
 
+export interface DocumentViewResponse<V, D> extends nano.DocumentViewResponse<V, D> {
+  /** Array of view row objects.
+   *
+   * By default the information returned contains only the document ID and revision. */
+  rows: Array<{
+    id: string;
+    key: string;
+    value: V;
+    score?: number;
+    doc?: D & nano.Document;
+  }>;
+}
+
 /**
  * Extends a nano.db object with SuperCouch power
  *
@@ -24,7 +37,7 @@ export function supercouch<D>(db: nano.DocumentScope<D>, config: SuperCouchConfi
   const db_view = db.view.bind(db);
 
   // Extended version of nano's db.view method
-  (db as any).view = async function view<V>(ddoc: string, viewName: string, params: nano.DocumentViewParams, callback?: nano.Callback<nano.DocumentViewResponse<V, D>>): Promise<nano.DocumentViewResponse<V, D> | undefined> {
+  (db as any).view = async function view<V>(ddoc: string, viewName: string, params: nano.DocumentViewParams, callback?: nano.Callback<DocumentViewResponse<V, D>>): Promise<DocumentViewResponse<V, D> | undefined> {
 
     // Check if it's a supercouch query and process it
     const type = getQueryType(params);
@@ -44,7 +57,7 @@ export function supercouch<D>(db: nano.DocumentScope<D>, config: SuperCouchConfi
             requestError.stack = e.stack;
           }
           if (callback)
-            process.nextTick(() => callback(requestError, {} as nano.DocumentViewResponse<V, D>));
+            process.nextTick(() => callback(requestError, {} as DocumentViewResponse<V, D>));
           else
             throw requestError;
         }
@@ -64,7 +77,7 @@ export function supercouch<D>(db: nano.DocumentScope<D>, config: SuperCouchConfi
             requestError.stack = e.stack;
           }
           if (callback)
-            process.nextTick(() => callback(requestError, {} as nano.DocumentViewResponse<V, D>));
+            process.nextTick(() => callback(requestError, {} as DocumentViewResponse<V, D>));
           else
             throw requestError;
         }
@@ -100,38 +113,45 @@ function getQueryType(qs: nano.DocumentViewParams) {
   return null;
 }
 
-async function processKeysQuery<V,D>(sSetDB: SSetDB, keys: string[][]): Promise<nano.DocumentViewResponse<V, D>> {
+async function processKeysQuery<V,D>(sSetDB: SSetDB, keys: string[][]): Promise<DocumentViewResponse<V, D>> {
   const promises = keys.map(key => {
     const [_marker, db, ...id] = key;
-    return sSetDB.rangeByIndex<V>(db, id, { min: -1, max: -1, count: 1 });
+    return sSetDB.rangeByIndex<V>(db, id, { min: -1, max: -1, count: 1, includeScores: true });
   });
   const results = await Promise.all(promises);
   return {
     offset: 0,
     total_rows: keys.length,
     rows: results.map((result, index) => {
+      const row = result.rows[0];
       return {
         id: '#SSET',
         key: keys[index].join(','),
-        value: result.rows[0],
+        value: row.value,
+        score: row.score,
       }
     }),
   };
 }
 
-async function processRangeQuery<V, D>(sSetDB: SSetDB, startKey: [...string[], number], endKey: [...string[], number], skip?: number, limit?: number, descending?: boolean): Promise<nano.DocumentViewResponse<V, D>> {
+export type ValueScoreResponse<T> = {
+  value: T;
+  score?: number;
+}
+
+async function processRangeQuery<V, D>(sSetDB: SSetDB, startKey: [...string[], number], endKey: [...string[], number], skip?: number, limit?: number, descending?: boolean): Promise<DocumentViewResponse<V, D>> {
   const db = startKey[1] as string;
   const id = startKey.slice(2, -1) as string[];
   const key = ['#SSET', db, ...id].join(',');
   const min = startKey[startKey.length - 1] as number;
   const max = startKey[endKey.length - 1] as number;
   const order = descending ? 'desc' : 'asc';
-  const result = await sSetDB.rangeByScore<V>(db, id, { min, max, offset: skip, count: limit, order, includeTotal: true });
+  const result = await sSetDB.rangeByScore<V>(db, id, { min, max, offset: skip, count: limit, order, includeTotal: true, includeScores: true });
   return {
     offset: result.paging.offset,
     total_rows: result.paging.total,
     rows: result.rows.map(value => {
-      return { id: '#SSET', key, value }
+      return { id: '#SSET', key, value: value.value, score: value.score }
     }),
   };
 }
