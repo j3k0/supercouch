@@ -55,6 +55,9 @@ export type SSetRangeQuery = {
    *
    * Might require an extra request if offset or limit are specified. */
   includeTotal?: boolean;
+
+  /** Include the score alongside the value in the response */
+  includeScores?: boolean;
 };
 
 /**
@@ -67,11 +70,19 @@ export type SSetRangeQuery = {
     offset: number;
     /** Max number of elements requested */
     count: number;
-    /** Total number of elements in the range */
+    /** Total number of elements in the range.
+     *
+     * Added only if "includeTotal" is set to true in the query. Set to -1 otherwise. */
     total: number;
   };
   /** List of elements */
-  rows: T[];
+  rows: {
+    value: T;
+    /** Score for this element.
+     *
+     * Added only if "includeScores" is set to true in the query */
+    score?: number;
+  }[];
 }
 
 /** When add an element to the set, it gets added only if its score is the highest of equal elements in the set.
