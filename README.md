@@ -67,7 +67,6 @@ In your **App**, you can retrieve the latest state for the user this way:
 // Retrieve the list of users that logged-in in the last hour
 const userIds = await nano.view("design", "view", {
   // Key is 3 levels deep, 4th level is the min and max scores.
-  group: true, group_level: 3,
   start_key: ["$SSET", "UsersIndex", "ByDate", +new Date() - 3600000],
   end_key: ["$SSET", "UsersIndex", "ByDate", +new Date()],
 });
@@ -77,6 +76,8 @@ const users = await nano.view("design", "view", {
   keys: ["$SSET","Users","bob33"], ["$SSET","USERS","alice202"],
 }));
 ```
+
+_See [lib/supercouch.nano](https://github.com/j3k0/supercouch/tree/master/lib/supercouch.nano) for details about the NodeJS interface._
 
 Or the equivalent right from Redis:
  * `ZRANGE SSET:Users/myUserId -1 -1` &rArr; Array of JSON-encoded users.
@@ -99,7 +100,7 @@ COUCHDB_QUERY_SERVER_SUPERCOUCH="/opt/supercouch/bin/supercouch --redis-url redi
 
 This depends on your system, for a quick and dirty solution you can edit `/opt/couchdb/bin/couchdb` and add the environment variable next to others already in this file.
 
-By default, supercouch will connect to redis running on localhost port 6389
+By default, supercouch will connect to redis running on localhost port 6389. Note that it is meant to work on a central redis server (or cluster), so all nodes of your CouchDB cluster should connect to the same database.
 
 Use `/opt/supercouch/bin/supercouch --help` for a list of options.
 
@@ -109,7 +110,7 @@ Use `/opt/supercouch/bin/supercouch --help` for a list of options.
 
 Add an element to a Sorted Set, if its value is larger that the existing one for this element.
 
-usage: `emit(["$SSET", database, id...], { keep: "LAST_VALUE", score, value })`
+usage: `emit(["$SSET", database, id...], { keep: "LAST_VALUE" | "ALL_VALUES", score, value })`
 
  * `database` `[string]` - Group entries by database.
  * `id` `[string, ...]` - An array of strings.
@@ -121,7 +122,7 @@ usage: `emit(["$SSET", database, id...], { keep: "LAST_VALUE", score, value })`
 
 Example:
 ```js
-emit(["$SSET", "Users", "SignUp", "ByDate"], {
+emit(["$SSET", "001.Users", "SignUp", "ByDate"], {
   score: +new Date(doc.user.signUpDate),
   value: doc.user.id,
   keep: "ALL_VALUES",
@@ -132,36 +133,45 @@ emit(["$SSET", "Users", "SignUp", "ByDate"], {
 
 The worst case was making thousands of parallel requests to get the final state of a bunch of entities.
 
-Running on MacBook M1 Pro, in a 250GB database.
+Running on a MacBook M1 Pro, using a 250GB database with 100,000 entries.
 
 With **CouchDB** alone, to retrieve the state for 4,000 entities:
 ```
-listCustomers:                    2 queries in    894ms. body: 219Kb
-getCustomerClaims:             4000 queries in 11,110ms. body: 435Kb
-lastestTransactionPerPurchase: 3926 queries in 11,687ms. body: 2Mb
+listEntityX:                    2 queries in    894ms. body: 219Kb
+getEntityClaims:             4000 queries in 11,110ms. body: 435Kb
+lastestTransactionPerEntity: 3926 queries in 11,687ms. body: 2Mb
 ```
 Total: **23,691 ms**
 
 With **SuperCouch (Redis)** (refactored: 1 additional request is required):
 ```
-listCustomers:                    2 queries in  2ms. body: 35Kb
-getCustomerClaims:             4000 queries in 41ms. body: 167Kb
-lastestTransactionPerPurchase: 3944 queries in 47ms. body: 300Kb
-getTransactionState:           3944 queries in 23ms. body: 2Mb
+listEntityX:                    2 queries in  2ms. body: 35Kb
+getEntityClaims:             4000 queries in 41ms. body: 167Kb
+lastestTransactionPerEntity: 3944 queries in 47ms. body: 300Kb
+getTransactionState:         3944 queries in 23ms. body: 2Mb
 ```
-Total: **113 ms** (210x faster)
+Total: **113 ms** (_210x faster_)
 
 ## Considerations
 
-* This query server is not sandboxed! Everything is possible from the view functions. Production ready? Only if you trust the people writing map functions and that nobody can insert a design document in your DB. This is an open door for privilege escalation.
-* The operations supported by the SSET are a subset of sorted-set operations, running them in any order give the same result.
-* Emitting `SSET` operations to the CouchDB view is possible by providing the `--emit-sset` flag to the supercouch query server. This slows down view generation and uses disk resources. It can be useful for debugging.
-* Deleted documents? They are not handled.
-  * For cleanup, use the `database` field (or a prefix).
-  * Update the view to use a new prefix, it will be regenerated from scratch, so without processing the content of deleted documents.
+* This query server is not sandboxed! Everything is possible from the view functions.
+  * Production ready? Only if you trust the people writing map functions and that nobody can insert a design document in your DB. This is an open door for privilege escalation.
+  * The same feature could be reworked as a patch to CouchDB's own implementation of the query server (or right into the core).
+* The operations supported by `SSET` are a subset of sorted-set operations, running them in any order will give the same result.
+* Emitting `SSET` operations also to the CouchDB view is possible by providing the `--emit-sset` flag to the supercouch query server.
+  * This slows down view generation and uses disk resources, but can be useful for debugging.
+* Deleted documents? They are not handled (the query server isn't notified about those, because it's not meant to do this).
+  * For cleanups, make use the `database` field (or a prefix).
+  * Update the view with a new prefix for this field. The view will be regenerated from scratch, i.e. without processing the content of deleted documents.
   * Update your app to access data using this prefix. Ideally, store the "live" prefix in Redis, so no app reload is needed.
   * Flush all data from "SSET:OldPrefix*".
 * While supercouch only supports Redis, it's meant to be extensible.
+
+## Ideas
+
+* Make it possible to use a different redis server for different "database".
+* Implement in CouchJS.
+* Make it part of the Core.
 
 ## Limitation
 
@@ -171,4 +181,4 @@ SuperCouch does not support custom reduce functions.
 
 MIT
 
-Copyright 2022, Jean-Christophe Hoelt
+Copyright 2022, Jean-Christophe Hoelt <hoelt@fovea.cc>
