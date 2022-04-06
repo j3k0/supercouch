@@ -67,7 +67,7 @@ export class SSetRedis implements SSetDB {
       options.REV = true;
     }
     const [values, total] = await Promise.all([
-      this.redisClient.zRange(key, min, max, options),
+      zRange(this.redisClient, query.includeScores ?? false, key, min, max, options),
       query.includeTotal
         ? (this.redisClient.zCount(key, query.min, query.max))
         : new Promise<number>(resolve => resolve(-1)),
@@ -78,7 +78,10 @@ export class SSetRedis implements SSetDB {
         offset: options.LIMIT.offset ?? 0,
         total: typeof total === 'number' ? total : -1,
       },
-      rows: values.map(v => JSON.parse(v) as T)
+      rows: values.map(v => ({
+        value: JSON.parse(v.value) as T,
+        score: v.score,
+      }))
     }
   }
 
@@ -90,5 +93,18 @@ export class SSetRedis implements SSetDB {
   /** @inheritdoc */
   rangeByIndex<T>(db: string, id: string[], query: SSetRangeQuery): Promise<SSetRangeResponse<T>> {
     return this.rangeBy('INDEX', db, id, query);
+  }
+}
+
+async function zRange(redisClient: redis.RedisClientType, withScore: boolean, key: string, min: number, max: number, options: any) {
+  if (withScore) {
+    return redisClient.zRangeWithScores(key, min, max, options)
+  }
+  else {
+    const result = await redisClient.zRange(key, min, max, options);
+    return result.map(r => ({
+      value: r,
+      score: undefined,
+    }));
   }
 }

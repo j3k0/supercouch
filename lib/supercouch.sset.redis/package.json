@@ -1,6 +1,6 @@
 {
   "name": "supercouch.sset.redis",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "SuperCouch SortedSet database implemented with Redis",
   "main": "dist/index.js",
   "types": "./dist/index.d.ts",
@@ -19,7 +19,7 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^17.0.23",
-    "supercouch.sset": "^0.5.1",
+    "supercouch.sset": "^0.6.1",
     "typescript": "^4.6.3",
     "redis": "^4.x"
   },
