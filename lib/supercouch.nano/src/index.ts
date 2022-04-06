@@ -119,13 +119,14 @@ async function processKeysQuery<V,D>(sSetDB: SSetDB, keys: string[][]): Promise<
   };
 }
 
-async function processRangeQuery<V, D>(sSetDB: SSetDB, startKey: [...string[], number], endKey: [...string[], number], skip?: number, limit?: number): Promise<nano.DocumentViewResponse<V, D>> {
+async function processRangeQuery<V, D>(sSetDB: SSetDB, startKey: [...string[], number], endKey: [...string[], number], skip?: number, limit?: number, descending?: boolean): Promise<nano.DocumentViewResponse<V, D>> {
   const db = startKey[1] as string;
   const id = startKey.slice(2, -1) as string[];
   const key = ['#SSET', db, ...id].join(',');
   const min = startKey[startKey.length - 1] as number;
   const max = startKey[endKey.length - 1] as number;
-  const result = await sSetDB.rangeByScore<V>(db, id, { min, max, offset: skip, count: limit, includeTotal: true });
+  const order = descending ? 'desc' : 'asc';
+  const result = await sSetDB.rangeByScore<V>(db, id, { min, max, offset: skip, count: limit, order, includeTotal: true });
   return {
     offset: result.paging.offset,
     total_rows: result.paging.total,
