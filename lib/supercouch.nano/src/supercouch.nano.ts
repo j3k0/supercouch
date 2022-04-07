@@ -194,18 +194,18 @@ async function processKeysQuery<V, D>(sSetDB: SSetDB, keys: string[][], options:
     return sSetDB.rangeByIndex<V>(db, id, { min: -1, max: -1, includeScores: options.withScores, includeTotal: false });
   });
   const results = await Promise.all(promises);
+  const keyRows = results.map((result, index) => {
+    return { key: keys[index].join(','), row: result.rows[0] }
+  });
   return {
     offset: 0,
     total_rows: keys.length,
-    rows: results.map((result, index) => {
-      const row = result.rows[0];
-      return {
-        id: '#SSET',
-        key: keys[index].join(','),
-        value: row.value,
-        score: row.score,
-      }
-    }),
+    rows: keyRows.filter(kr => kr.row).map(kr => ({
+      id: "$SSET",
+      key: kr.key,
+      value: kr.row.value,
+      score: kr.row.score,
+    })),
   };
 }
 
