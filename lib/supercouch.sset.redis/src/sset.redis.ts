@@ -77,7 +77,7 @@ export class SSetRedis implements SSetDB {
     return {
       paging: {
         count: options.LIMIT?.count ?? -1,
-        offset: options.LIMIT.offset ?? 0,
+        offset: options.LIMIT?.offset ?? 0,
         total:
           hasOffsetOrCount
             ? (typeof total === 'number' ? total : -1)
