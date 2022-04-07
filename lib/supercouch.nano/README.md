@@ -56,11 +56,26 @@ Extends `nano.DocumentViewResponse` with an additional field:
 
 Extends `nano.DocumentStore` with the definition of the `view` method that accepts `supercouch.DocumentViewParams` and returns a `supercouch.DocumentViewResponse`.
 
-### supercouch.supercouch<D>(db)
+### supercouch.supercouch<D>(db, config)
 
   - `db`: `nano.DocumentScope<D>`
+  - `config`: `supercouch.SuperCouchConfig`
 
-Add SuperCouch powers to a nano db object.
+Add SuperCouch powers to a nano `db` object. `config` defines the connection to SuperCouch's backend.
+
+See `supercouch.SuperCouchConfig`
+
+### supercouch.SuperCouchConfig
+
+Define the configuration of the SuperCouch extension, i.e. how to connect to the backend storage.
+
+```js
+{
+  redisClient?: redis.RedisClientType
+}
+```
+
+Pass in a redis client (from the `redis` npm module) that SuperCouch will use for `$SSET` queries.
 
 ## License
 
