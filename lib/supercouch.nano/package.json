@@ -1,6 +1,6 @@
 {
   "name": "supercouch.nano",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Extends apache/couchdb-nano with SuperCouch power",
   "main": "dist/index.js",
   "types": "./dist/index.d.ts",
@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "supercouch.sset": "^0.6.1",
-    "supercouch.sset.redis": "^0.6.1"
+    "supercouch.sset.redis": "^0.6.2"
   },
   "devDependencies": {
     "@types/mocha": "^9.1.0",
