@@ -83,7 +83,7 @@ Or the equivalent right from Redis:
  * `ZRANGE SSET:Users/myUserId -1 -1` &rArr; Array of JSON-encoded users.
  * `ZRANGE SSET:UsersIndex/ByDate 1649052410191 1649056002596 BYSCORE` &rArr; Array of JSON-encoded users.
 
-## Installing
+## Installing on your Server
 
 Clone the repo and install dependencies:
 
@@ -103,6 +103,10 @@ This depends on your system, for a quick and dirty solution you can edit `/opt/c
 By default, supercouch will connect to redis running on localhost port 6389. Note that it is meant to work on a central redis server (or cluster), so all nodes of your CouchDB cluster should connect to the same database.
 
 Use `/opt/supercouch/bin/supercouch --help` for a list of options.
+
+## Usage from your app
+
+* See [supercouch.nano](https://github.com/j3k0/supercouch/tree/master/lib/supercouch.nano) for the NodeJS client library.
 
 ## Emit Commands
 
