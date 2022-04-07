@@ -191,7 +191,7 @@ type QueryOptions = {
 async function processKeysQuery<V, D>(sSetDB: SSetDB, keys: string[][], options: QueryOptions): Promise<DocumentViewResponse<V, D>> {
   const promises = keys.map(key => {
     const [_marker, db, ...id] = key;
-    return sSetDB.rangeByIndex<V>(db, id, { min: -1, max: -1, count: 1, includeScores: options.withScores, includeTotal: options.withTotalRows });
+    return sSetDB.rangeByIndex<V>(db, id, { min: -1, max: -1, includeScores: options.withScores, includeTotal: false });
   });
   const results = await Promise.all(promises);
   return {
