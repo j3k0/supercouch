@@ -102,7 +102,7 @@ export function supercouch<D>(db: nano.DocumentScope<D>, config: SuperCouchConfi
 
     // Check if it's a supercouch query and process it
     const type = getQueryType(params);
-    console.log(params, type);
+    // console.log(params, type);
     switch (type) {
       case 'keys': {
         try {
@@ -158,8 +158,7 @@ export function supercouch<D>(db: nano.DocumentScope<D>, config: SuperCouchConfi
  * CouchDB's native view. */
 function getQueryType(qs: nano.DocumentViewParams): 'keys' | 'range' | null {
 
-  console.log({qs});
-
+  // console.log({qs});
   // "keys", used to retrieve the latest state for a bunch of entities
   if (qs.keys && qs.keys[0] && qs.keys[0][0] === "$SSET")
     return 'keys';
