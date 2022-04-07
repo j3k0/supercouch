@@ -7,10 +7,30 @@ export type SuperCouchConfig = {
   redisClient?: RedisClientType;
 }
 
-export interface DocumentViewResponse<V, D> extends nano.DocumentViewResponse<V, D> {
-  /** Array of view row objects.
+export interface DocumentViewParams extends nano.DocumentViewParams {
+  /** Include the associated score for "$SSET" documents.
    *
-   * By default the information returned contains only the document ID and revision. */
+   * The downside is a little more data to send over the wire, set this to false
+   * to gain that extra bit of performance.
+   *
+   * @default true */
+  include_scores?: boolean;
+
+  /** Include the total number of rows.
+   *
+   * Might require an extra request.
+   *
+   * @default true */
+  include_total_rows?: boolean;
+}
+
+/** View response.
+ *
+ * Extended to optionally include the score (for "$SSET" views).
+ *
+ * @see Docs: {@link http://docs.couchdb.org/en/latest/api/ddoc/views.html#get--db-_design-ddoc-_view-view} */
+export interface DocumentViewResponse<V, D> extends nano.DocumentViewResponse<V, D> {
+  /** @inheritdoc */
   rows: Array<{
     id: string;
     key: string;
@@ -20,15 +40,37 @@ export interface DocumentViewResponse<V, D> extends nano.DocumentViewResponse<V,
   }>;
 }
 
+/** Documents scope.
+ *
+ * Differs from nano.DocumentScope for view calls. Those can accept supercouch.DocumentViewParams
+ * and return supercouch.DocumentViewResponse */
+export interface DocumentScope<D> extends nano.DocumentScope<D> {
+
+  /** @inheritdoc */
+  view<V>(
+    designName: string,
+    viewName: string,
+    callback?: nano.Callback<nano.DocumentViewResponse<V,D>>
+  ): Promise<nano.DocumentViewResponse<V,D>>;
+
+  /** @inheritdoc */
+  view<V>(
+    designName: string,
+    viewName: string,
+    params: DocumentViewParams,
+    callback?: nano.Callback<DocumentViewResponse<V,D>>
+  ): Promise<DocumentViewResponse<V,D>>;
+}
+
 /**
- * Extends a nano.db object with SuperCouch power
+ * Adds SuperCouch powers to a nano.db object
  *
  * @param db - nano database object
  * @param config - supercouch configuration
  *
- * @returns a nano database object with SuperCouch power
+ * @returns a nano database object with SuperCouch powers
  */
-export function supercouch<D>(db: nano.DocumentScope<D>, config: SuperCouchConfig) {
+export function supercouch<D>(db: nano.DocumentScope<D>, config: SuperCouchConfig): DocumentScope<D> {
 
   const sSetDB = config.redisClient ? new SSetRedis(config.redisClient) : null;
   if (!sSetDB) throw new Error('Please provide either "redisClient" or "redisURL" in supercouch config');
@@ -37,14 +79,19 @@ export function supercouch<D>(db: nano.DocumentScope<D>, config: SuperCouchConfi
   const db_view = db.view.bind(db);
 
   // Extended version of nano's db.view method
-  (db as any).view = async function view<V>(ddoc: string, viewName: string, params: nano.DocumentViewParams, callback?: nano.Callback<DocumentViewResponse<V, D>>): Promise<DocumentViewResponse<V, D> | undefined> {
+  (db as any).view = async function view<V>(ddoc: string, viewName: string, params: DocumentViewParams, callback?: nano.Callback<DocumentViewResponse<V, D>>): Promise<DocumentViewResponse<V, D> | undefined> {
+
+    const options = {
+      withScores: params.include_scores ?? true,
+      withTotalRows: params.include_total_rows ?? true,
+    };
 
     // Check if it's a supercouch query and process it
     const type = getQueryType(params);
     switch (type) {
       case 'keys': {
         try {
-          const response = await processKeysQuery<V, D>(sSetDB, params.keys as string[][]);
+          const response = await processKeysQuery<V, D>(sSetDB, params.keys as string[][], options);
           if (callback) process.nextTick(() => callback(null, response));
           return response;
         }
@@ -64,7 +111,7 @@ export function supercouch<D>(db: nano.DocumentScope<D>, config: SuperCouchConfi
       } break;
       case 'range': {
         try {
-          const response = await processRangeQuery<V, D>(sSetDB, params.startkey || params.start_key, params.endkey || params.end_key, params.skip, params.limit);
+          const response = await processRangeQuery<V, D>(sSetDB, params.startkey || params.start_key, params.endkey || params.end_key, options, params.skip, params.limit, params.descending);
           if (callback) process.nextTick(() => callback(null, response));
           return response;
         }
@@ -86,9 +133,14 @@ export function supercouch<D>(db: nano.DocumentScope<D>, config: SuperCouchConfi
         return db_view<V>(ddoc, viewName, params, callback);
     }
   }
+  return db;
 }
 
-function getQueryType(qs: nano.DocumentViewParams) {
+/** Figure out the type of query based on the "keys" or "start_key" parameters.
+ *
+ * This doesn't support mixed types: a single view request will either go to SuperCouch's backend or to
+ * CouchDB's native view. */
+function getQueryType(qs: nano.DocumentViewParams): 'keys' | 'range' | null {
 
   // "keys", used to retrieve the latest state for a bunch of entities
   if (qs.keys && qs.keys[0] && qs.keys[0][0] === "$SSET")
@@ -113,10 +165,15 @@ function getQueryType(qs: nano.DocumentViewParams) {
   return null;
 }
 
-async function processKeysQuery<V,D>(sSetDB: SSetDB, keys: string[][]): Promise<DocumentViewResponse<V, D>> {
+type QueryOptions = {
+  withScores: boolean;
+  withTotalRows: boolean;
+}
+
+async function processKeysQuery<V, D>(sSetDB: SSetDB, keys: string[][], options: QueryOptions): Promise<DocumentViewResponse<V, D>> {
   const promises = keys.map(key => {
     const [_marker, db, ...id] = key;
-    return sSetDB.rangeByIndex<V>(db, id, { min: -1, max: -1, count: 1, includeScores: true });
+    return sSetDB.rangeByIndex<V>(db, id, { min: -1, max: -1, count: 1, includeScores: options.withScores, includeTotal: options.withTotalRows });
   });
   const results = await Promise.all(promises);
   return {
@@ -134,19 +191,14 @@ async function processKeysQuery<V,D>(sSetDB: SSetDB, keys: string[][]): Promise<
   };
 }
 
-export type ValueScoreResponse<T> = {
-  value: T;
-  score?: number;
-}
-
-async function processRangeQuery<V, D>(sSetDB: SSetDB, startKey: [...string[], number], endKey: [...string[], number], skip?: number, limit?: number, descending?: boolean): Promise<DocumentViewResponse<V, D>> {
+async function processRangeQuery<V, D>(sSetDB: SSetDB, startKey: [...string[], number], endKey: [...string[], number], options: QueryOptions, skip?: number, limit?: number, descending?: boolean): Promise<DocumentViewResponse<V, D>> {
   const db = startKey[1] as string;
   const id = startKey.slice(2, -1) as string[];
   const key = ['#SSET', db, ...id].join(',');
   const min = startKey[startKey.length - 1] as number;
   const max = startKey[endKey.length - 1] as number;
   const order = descending ? 'desc' : 'asc';
-  const result = await sSetDB.rangeByScore<V>(db, id, { min, max, offset: skip, count: limit, order, includeTotal: true, includeScores: true });
+  const result = await sSetDB.rangeByScore<V>(db, id, { min, max, offset: skip, count: limit, order, includeTotal: options.withTotalRows, includeScores: options.withScores });
   return {
     offset: result.paging.offset,
     total_rows: result.paging.total,
