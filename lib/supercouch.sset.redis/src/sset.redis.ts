@@ -57,7 +57,8 @@ export class SSetRedis implements SSetDB {
     if (by === 'SCORE') {
       options.BY = by;
     }
-    if (typeof query.offset == 'number' || typeof query.count === 'number') {
+    const hasOffsetOrCount = typeof query.offset == 'number' || typeof query.count === 'number';
+    if (hasOffsetOrCount) {
       options.LIMIT = {
         count: query.count ?? 9999999999,
         offset: query.offset ?? 0,
@@ -66,9 +67,10 @@ export class SSetRedis implements SSetDB {
     if (isReversed) {
       options.REV = true;
     }
+    const needZCount = query.includeTotal && hasOffsetOrCount;
     const [values, total] = await Promise.all([
       zRange(this.redisClient, query.includeScores ?? false, key, min, max, options),
-      query.includeTotal
+      needZCount
         ? (this.redisClient.zCount(key, query.min, query.max))
         : new Promise<number>(resolve => resolve(-1)),
     ]);
@@ -76,7 +78,10 @@ export class SSetRedis implements SSetDB {
       paging: {
         count: options.LIMIT?.count ?? -1,
         offset: options.LIMIT.offset ?? 0,
-        total: typeof total === 'number' ? total : -1,
+        total:
+          hasOffsetOrCount
+            ? (typeof total === 'number' ? total : -1)
+            : values.length,
       },
       rows: values.map(v => ({
         value: JSON.parse(v.value) as T,
