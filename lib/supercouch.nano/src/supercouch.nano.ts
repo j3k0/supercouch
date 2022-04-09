@@ -194,7 +194,10 @@ async function processKeysQuery<V, D>(sSetDB: SSetDB, keys: string[][], options:
   });
   const results = await Promise.all(promises);
   const keyRows = results.map((result, index) => {
-    return { key: keys[index].join(','), row: result.rows[0] }
+    return {
+      key: keys[index] as unknown as string, // getting around nano's incorrect typing
+      row: result.rows[0]
+    }
   });
   return {
     offset: 0,
@@ -211,7 +214,7 @@ async function processKeysQuery<V, D>(sSetDB: SSetDB, keys: string[][], options:
 async function processRangeQuery<V, D>(sSetDB: SSetDB, startKey: [...string[], number], endKey: [...string[], number], options: QueryOptions, skip?: number, limit?: number, descending?: boolean): Promise<DocumentViewResponse<V, D>> {
   const db = startKey[1] as string;
   const id = startKey.slice(2, -1) as string[];
-  const key = ['#SSET', db, ...id].join(',');
+  const key: (string | number)[] = ['#SSET', db, ...id]; // .join(',');
   const min = startKey[startKey.length - 1] as number;
   const max = endKey[endKey.length - 1] as number;
   const order = descending ? 'desc' : 'asc';
@@ -220,7 +223,12 @@ async function processRangeQuery<V, D>(sSetDB: SSetDB, startKey: [...string[], n
     offset: result.paging.offset,
     total_rows: result.paging.total,
     rows: result.rows.map(value => {
-      return { id: '#SSET', key, value: value.value, score: value.score }
+      return {
+        id: '#SSET',
+        key: (typeof value.score === 'number' ? key.concat(value.score) : key) as unknown as string, // nano's incorrect typing...
+        value: value.value,
+        score: value.score
+      }
     }),
   };
 }
