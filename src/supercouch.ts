@@ -1,6 +1,6 @@
 import * as readline from 'node:readline';
 import { stdin, stdout } from 'node:process';
-import { createWriteStream, writeFileSync, WriteStream } from 'node:fs';
+import { appendFile, createWriteStream, writeFileSync, WriteStream } from 'node:fs';
 import { SSetDB, SSetKeepOption, SSetOp } from 'supercouch.sset';
 import { prepareRedisClient, SSetRedis } from 'supercouch.sset.redis';
 import { md5 } from './md5';
@@ -29,7 +29,6 @@ let mapFunctions: {
 
 let state: QueryServerState = {}; state;
 let sSetDB: SSetDB;
-let logFile: WriteStream | undefined;
 
 function usage() {
   console.error('Usage: node supercouch.js --redis-url redis://localhost:6379 [--emit-sset]');
@@ -88,14 +87,9 @@ async function main(argv: string[]) {
   else {
     usage();
   }
-  if (config.logFile) {
-     logFile = createWriteStream(config.logFile, {flags : 'w'});
-  }
 
   const pipe = readline.createInterface({ input: stdin, output: stdout });
   pipe.on("line", async function lineReceived(input: string): Promise<void> {
-    if (logFile) logFile.cork();
-
     if (/^[ \t\n]*$/.test(input)) return;
     let dataLine: string[] = [];
     try {
@@ -111,7 +105,6 @@ async function main(argv: string[]) {
         superLog('error', "unknown error...");
         console.log(JSON.stringify(["error", "unknown_error", "an error occurred"]));
       }
-      if (logFile) logFile.uncork();
       return;
     }
 
@@ -119,8 +112,6 @@ async function main(argv: string[]) {
       const output = JSON.stringify(await processQuery(dataLine));
       console.log(output);
     }
-
-    if (logFile) logFile.uncork();
   });
 }
 
@@ -230,8 +221,8 @@ global.emit = function (key, value) {
 
 function superLog(level: string, str: string) {
   const line = '[SuperCouch:' + level + '@' + new Date().toISOString() + '] ' + str;
-  if (logFile) {
-    logFile.write(line + '\n');
+  if (config.logFile) {
+    appendFile(config.logFile, line + '\n', () => {});
   }
   else {
     console.error(line);
