@@ -1,6 +1,6 @@
 import * as readline from 'node:readline';
 import { stdin, stdout } from 'node:process';
-import { appendFile, createWriteStream, writeFileSync, WriteStream } from 'node:fs';
+import { appendFile, writeFileSync } from 'node:fs';
 import { SSetDB, SSetKeepOption, SSetOp } from 'supercouch.sset';
 import { prepareRedisClient, SSetRedis } from 'supercouch.sset.redis';
 import { md5 } from './md5';
