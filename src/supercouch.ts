@@ -1,6 +1,6 @@
 import * as readline from 'node:readline';
 import { stdin, stdout } from 'node:process';
-import { writeFileSync } from 'node:fs';
+import { createWriteStream, writeFileSync, WriteStream } from 'node:fs';
 import { SSetDB, SSetKeepOption, SSetOp } from 'supercouch.sset';
 import { prepareRedisClient, SSetRedis } from 'supercouch.sset.redis';
 import { md5 } from './md5';
@@ -29,12 +29,14 @@ let mapFunctions: {
 
 let state: QueryServerState = {}; state;
 let sSetDB: SSetDB;
+let logFile: WriteStream | undefined;
 
 function usage() {
   console.error('Usage: node supercouch.js --redis-url redis://localhost:6379 [--emit-sset]');
   console.error();
   console.error(' --emit-sset ......... Emit the $SSET entries to the view. Serves as a backup to rebuild the redis database.');
   console.error(' --redis-url [URL] ... Set the URL to connect to Redis.');
+  console.error(' --log-file [PATH] ... Set the path to supercouch log files.');
   console.error();
   process.exit(1);
 }
@@ -42,6 +44,7 @@ function usage() {
 type Configuration = {
   emitSSet: boolean;
   redisURL: string;
+  logFile: string;
 };
 let config: Configuration;
 
@@ -49,10 +52,15 @@ function parseArguments(argv: string[]): Configuration {
   const ret: Configuration = {
     emitSSet: false,
     redisURL: '',
+    logFile: '',
   }
   for (let i = 2; i < argv.length; ++i) {
     if (argv[i] === '--redis-url') {
       ret.redisURL = argv[i + 1];
+      ++i;
+    }
+    else if (argv[i] === '--log-file') {
+      ret.logFile = argv[i + 1];
       ++i;
     }
     else if (argv[i] === '--emit-sset') {
@@ -80,9 +88,14 @@ async function main(argv: string[]) {
   else {
     usage();
   }
+  if (config.logFile) {
+     logFile = createWriteStream(config.logFile, {flags : 'w'});
+  }
 
   const pipe = readline.createInterface({ input: stdin, output: stdout });
   pipe.on("line", async function lineReceived(input: string): Promise<void> {
+    if (logFile) logFile.cork();
+
     if (/^[ \t\n]*$/.test(input)) return;
     let dataLine: string[] = [];
     try {
@@ -90,8 +103,15 @@ async function main(argv: string[]) {
       if (data.line?.length) dataLine = data.line;
     }
     catch (err) {
-      if (err instanceof Error)
+      if (err instanceof Error) {
+        superLog('error', 'parse error: ' + err.message + " input: \"" + input + "\"")
         console.log(JSON.stringify(["error", "parse_error", err.message + " input: \"" + input + "\""]));
+      }
+      else {
+        superLog('error', "unknown error...");
+        console.log(JSON.stringify(["error", "unknown_error", "an error occurred"]));
+      }
+      if (logFile) logFile.uncork();
       return;
     }
 
@@ -99,6 +119,8 @@ async function main(argv: string[]) {
       const output = JSON.stringify(await processQuery(dataLine));
       console.log(output);
     }
+
+    if (logFile) logFile.uncork();
   });
 }
 
@@ -166,13 +188,14 @@ async function processQuery(line: any[]): Promise<any> {
       // case 'rewrites': return true; unsupported
 
       default:
+        superLog('error', "command '" + line[0] + "' is not supported by this query server");
         return ["error", "unsupported_command", "command '" + line[0] + "' is not supported by this query server"];
     }
   }
   catch (uErr) {
     const err = uErr as unknown as Error;
-    if (err.message) console.error(err.message);
-    if (err.stack) console.error(err.stack);
+    if (err.message) superLog('error', err.message);
+    if (err.stack) superLog('error', err.stack);
     return ["error", "processing_failed", 'message' in err ? err.message : 'unknown message'];
   }
 }
@@ -205,8 +228,18 @@ global.emit = function (key, value) {
     emits.push([key, value]);
 }
 
+function superLog(level: string, str: string) {
+  const line = '[SuperCouch:' + level + '@' + new Date().toISOString() + '] ' + str;
+  if (logFile) {
+    logFile.write(line + '\n');
+  }
+  else {
+    console.error(line);
+  }
+}
+
 function debugLog(str: string) {
-  console.error('[SuperCouch@' + new Date().toISOString() + '] ' + str);
+  superLog('debug', str);
 }
 
 global.log = function (str) {
@@ -216,7 +249,9 @@ global.log = function (str) {
 
 async function mapDoc(map: Function, doc: object) {
 
+  superLog('info', '' + doc['_id'] + ' processing');
   map(doc);
+  superLog('info', '' + doc['_id'] + ' done. ' + emits.length + ' emits');
   const ret: any[] = [];
   const ops: SSetOp<any>[] = [];
 
