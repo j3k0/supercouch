@@ -1,9 +1,9 @@
 #!/bin/bash
 cd "$(dirname "$0")/.."
 if [ ! -z "$1" ]; then
-  /opt/node/bin/node -r source-map-support/register -r module-alias/register build/supercouch.js "$@"
+  exec /opt/node/bin/node -r source-map-support/register -r module-alias/register build/supercouch.js "$@"
 else
   # start with default options
-  /opt/node/bin/node -r source-map-support/register -r module-alias/register build/supercouch.js --redis-url "$REDIS_RELAX_SSET_URL"
+  exec /opt/node/bin/node -r source-map-support/register -r module-alias/register build/supercouch.js --redis-url "$REDIS_RELAX_SSET_URL"
   # --emit-sset
 fi

@@ -1,6 +1,6 @@
 import * as readline from 'node:readline';
 import { stdin, stdout } from 'node:process';
-import { appendFile, writeFileSync } from 'node:fs';
+import { appendFileSync, writeFileSync } from 'node:fs';
 import { SSetDB, SSetKeepOption, SSetOp } from 'supercouch.sset';
 import { prepareRedisClient, SSetRedis } from 'supercouch.sset.redis';
 import { md5 } from './md5';
@@ -36,6 +36,8 @@ function usage() {
   console.error(' --emit-sset ......... Emit the $SSET entries to the view. Serves as a backup to rebuild the redis database.');
   console.error(' --redis-url [URL] ... Set the URL to connect to Redis.');
   console.error(' --log-file [PATH] ... Set the path to supercouch log files.');
+  console.error(' --verbose ........... Write more information to the logs.');
+  console.error(' --debug.. ........... Write a crazy amount of debug information to the logs.');
   console.error();
   process.exit(1);
 }
@@ -44,15 +46,21 @@ type Configuration = {
   emitSSet: boolean;
   redisURL: string;
   logFile: string;
+  verbose: boolean;
+  debug: boolean;
 };
-let config: Configuration;
+const defaultConfig = {
+  emitSSet: false,
+  redisURL: '',
+  logFile: '',
+  verbose: false,
+  debug: false,
+}
+
+let config: Configuration = Object.assign({}, defaultConfig);
 
 function parseArguments(argv: string[]): Configuration {
-  const ret: Configuration = {
-    emitSSet: false,
-    redisURL: '',
-    logFile: '',
-  }
+  const ret = Object.assign({}, defaultConfig);
   for (let i = 2; i < argv.length; ++i) {
     if (argv[i] === '--redis-url') {
       ret.redisURL = argv[i + 1];
@@ -65,6 +73,12 @@ function parseArguments(argv: string[]): Configuration {
     else if (argv[i] === '--emit-sset') {
       ret.emitSSet = true;
     }
+    else if (argv[i] === '--debug') {
+      ret.debug = true;
+    }
+    else if (argv[i] === '--verbose') {
+      ret.verbose = true;
+    }
     else if (argv[i] === '--help') {
       console.error('HELP');
       usage();
@@ -75,6 +89,23 @@ function parseArguments(argv: string[]): Configuration {
     }
   }
   return ret;
+}
+
+function respond(outputObj: any) {
+  // ensure it's valid JSON
+  let output: string | undefined;
+  try {
+    output = JSON.stringify(outputObj);
+    if (config.debug) {
+      superLog(LogLevel.DEBUG, 'output: ' + output);
+    }
+    console.log(output);
+  }
+  catch (err) {
+    superLog(LogLevel.ERROR, 'Provided output is incorrect');
+    superLog(LogLevel.ERROR, 'output: ' + (output || '<<< undefined >>>'));
+    console.log(JSON.stringify(["error", "output_error", (output || '<<< undefined >>>')]));
+  }
 }
 
 /** Entry point */
@@ -90,6 +121,9 @@ async function main(argv: string[]) {
 
   const pipe = readline.createInterface({ input: stdin, output: stdout });
   pipe.on("line", async function lineReceived(input: string): Promise<void> {
+    if (config.debug) {
+      superLog(LogLevel.DEBUG, 'line: ' + input);
+    }
     if (/^[ \t\n]*$/.test(input)) return;
     let dataLine: string[] = [];
     try {
@@ -98,19 +132,18 @@ async function main(argv: string[]) {
     }
     catch (err) {
       if (err instanceof Error) {
-        superLog('error', 'parse error: ' + err.message + " input: \"" + input + "\"")
-        console.log(JSON.stringify(["error", "parse_error", err.message + " input: \"" + input + "\""]));
+        superLog(LogLevel.ERROR, 'parse error: ' + err.message + " input: \"" + input + "\"")
+        respond(["error", "parse_error", err.message + " input: \"" + input + "\""]);
       }
       else {
-        superLog('error', "unknown error...");
-        console.log(JSON.stringify(["error", "unknown_error", "an error occurred"]));
+        superLog(LogLevel.ERROR, "unknown error...");
+        respond(["error", "unknown_error", "an error occurred"]);
       }
       return;
     }
 
     if (dataLine.length > 0) {
-      const output = JSON.stringify(await processQuery(dataLine));
-      console.log(output);
+      respond(await processQuery(dataLine));
     }
   });
 }
@@ -131,13 +164,11 @@ async function processQuery(line: any[]): Promise<any> {
       case 'map_doc':
         if (!mapFunctions) return [];
         const obj: object = line[1];
-        // const promises = mapFunctions.map(fn => mapDoc(fn.map, obj));
-        // return await Promise.all(promises);
         const ret: any[] = [];
         for (let fn of mapFunctions) {
           ret.push(await mapDoc(fn.map, obj));
         }
-        return ret; //[await mapDoc(mapFunctions[0].map, obj)];
+        return ret;
 
       case 'reduce': {
         const functions: string[] = line[1];
@@ -179,14 +210,14 @@ async function processQuery(line: any[]): Promise<any> {
       // case 'rewrites': return true; unsupported
 
       default:
-        superLog('error', "command '" + line[0] + "' is not supported by this query server");
+        superLog(LogLevel.ERROR, "command '" + line[0] + "' is not supported by this query server");
         return ["error", "unsupported_command", "command '" + line[0] + "' is not supported by this query server"];
     }
   }
   catch (uErr) {
     const err = uErr as unknown as Error;
-    if (err.message) superLog('error', err.message);
-    if (err.stack) superLog('error', err.stack);
+    if (err.message) superLog(LogLevel.ERROR, err.message);
+    if (err.stack) superLog(LogLevel.ERROR, err.stack);
     return ["error", "processing_failed", 'message' in err ? err.message : 'unknown message'];
   }
 }
@@ -207,6 +238,13 @@ function registerFunction(str: string) {
 
 let emits: any[] = [];
 
+enum LogLevel {
+  DEBUG = 'D',
+  INFO = 'I',
+  WARN = 'W',
+  ERROR = 'E',
+}
+
 global.emit = function (key, value) {
   // dlog("emit: " + JSON.stringify({key, value}));
   if (key === null || key === undefined)
@@ -219,10 +257,10 @@ global.emit = function (key, value) {
     emits.push([key, value]);
 }
 
-function superLog(level: string, str: string) {
-  const line = '[SuperCouch:' + level + '@' + new Date().toISOString() + '] ' + str;
+function superLog(level: LogLevel, str: string) {
+  const line = '[supercouch] ' + level + '/ ' + new Date().toISOString() + ' ' + str;
   if (config.logFile) {
-    appendFile(config.logFile, line + '\n', () => {});
+    appendFileSync(config.logFile, line + '\n');
   }
   else {
     console.error(line);
@@ -230,19 +268,20 @@ function superLog(level: string, str: string) {
 }
 
 function debugLog(str: string) {
-  superLog('debug', str);
+  superLog(LogLevel.DEBUG, str);
 }
 
 global.log = function (str) {
   debugLog(str);
-  console.log(JSON.stringify(["log", str]));
+  // console.log(JSON.stringify(["log", str]));
 }
 
-async function mapDoc(map: Function, doc: object) {
+async function mapDoc(map: Function, doc: object): Promise<any[]> {
 
-  superLog('info', '' + doc['_id'] + ' processing');
+  if (config.debug) superLog(LogLevel.INFO, '' + doc['_id'] + ' ' + (doc['type'] || ''));
   map(doc);
-  superLog('info', '' + doc['_id'] + ' done. ' + emits.length + ' emits');
+
+  if (config.verbose) superLog(LogLevel.INFO, '' + doc['_id'] + ' ' + (doc['type'] || '') + ' => ' + emits.length + ' emits');
   const ret: any[] = [];
   const ops: SSetOp<any>[] = [];
 
@@ -250,7 +289,7 @@ async function mapDoc(map: Function, doc: object) {
   //
   // They are formatted this way:
   // [["$SSET", <db>, <id>...],{keep, score, value}]
-  for (const kv of emits) {
+  emits.forEach(kv => {
     let shouldEmit = true;
     if (kv?.[0]?.length >= 3 && typeof kv[0][0] === 'string') {
       const [marker, db, ...id] = kv[0] as string[];
@@ -264,10 +303,11 @@ async function mapDoc(map: Function, doc: object) {
     }
     if (shouldEmit)
       ret.push(kv);
-  }
+  });
 
   emits = [];
-  await sSetDB.process(ops);
+  if (ops.length > 0)
+    await sSetDB.process(ops);
   return ret;
 }
 
