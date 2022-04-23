@@ -32,7 +32,7 @@ describe('.view', () => {
       keys: [["$SSET", "DB", "ID0"]],
     });
     td.verify((dbView as any)(), { ignoreExtraArgs: true, times: 0 });
-    td.verify(redisClient.zRangeWithScores("SSET:DB/ID0", -1, -1), { ignoreExtraArgs: true, times: 1 });
+    td.verify(redisClient.zRangeWithScores("{SSET:DB}/ID0", -1, -1), { ignoreExtraArgs: true, times: 1 });
   });
 
   it('detects range queries', () => {
@@ -42,7 +42,7 @@ describe('.view', () => {
       end_key: ["$SSET", "DB", "ID0", 99],
     });
     td.verify((dbView as any)(), { ignoreExtraArgs: true, times: 0 });
-    td.verify(redisClient.zRangeWithScores("SSET:DB/ID0", 11, 99, { BY: "SCORE" }), { ignoreExtraArgs: true, times: 1 });
+    td.verify(redisClient.zRangeWithScores("{SSET:DB}/ID0", 11, 99, { BY: "SCORE" }), { ignoreExtraArgs: true, times: 1 });
   });
 
   it('passes on other requests to couchdb', () => {

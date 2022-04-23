@@ -214,7 +214,7 @@ async function processKeysQuery<V, D>(sSetDB: SSetDB, keys: string[][], options:
 async function processRangeQuery<V, D>(sSetDB: SSetDB, startKey: [...string[], number], endKey: [...string[], number], options: QueryOptions, skip?: number, limit?: number, descending?: boolean): Promise<DocumentViewResponse<V, D>> {
   const db = startKey[1] as string;
   const id = startKey.slice(2, -1) as string[];
-  const key: (string | number)[] = ['#SSET', db, ...id]; // .join(',');
+  const key: (string | number)[] = ['$SSET', db, ...id]; // .join(',');
   const min = startKey[startKey.length - 1] as number;
   const max = endKey[endKey.length - 1] as number;
   const order = descending ? 'desc' : 'asc';
@@ -224,7 +224,7 @@ async function processRangeQuery<V, D>(sSetDB: SSetDB, startKey: [...string[], n
     total_rows: result.paging.total,
     rows: result.rows.map(value => {
       return {
-        id: '#SSET',
+        id: '$SSET',
         key: (typeof value.score === 'number' ? key.concat(value.score) : key) as unknown as string, // nano's incorrect typing...
         value: value.value,
         score: value.score
