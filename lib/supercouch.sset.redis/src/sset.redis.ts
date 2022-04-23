@@ -1,9 +1,45 @@
 import { SSetDB, SSetOp, SSetRangeQuery, SSetRangeResponse } from "supercouch.sset";
 import * as redis from "redis";
 
-/** Convenience method to create a redis client and wait for connection */
-export async function prepareRedisClient(url: string): Promise<redis.RedisClientType> {
-  const client: redis.RedisClientType = redis.createClient({ url });
+/** Convenience method to create a redis client and wait for connection
+ *
+ * - For single-node configuration, it accepts a "redis://" formatted URL.
+ * - For cluster configuration, it accepts an url in the form: "redis-cluster://<rootNodeURL>,<rootNodeURL>,...[+nodeAddressMap]"
+ *   where each root node url is a redis url.
+ *   It can be followed with a "+" sign and the node address map in this format: "<address>=<host>:<port>,<address>=<host>:,<port>,..."
+ *   See https://github.com/redis/node-redis/blob/master/docs/clustering.md for details.
+ */
+export async function prepareRedisClient(url: string): Promise<redis.RedisClientType | redis.RedisClusterType> {
+  let client: redis.RedisClientType | redis.RedisClusterType;
+  if (url.slice(0, 16) === 'redis-cluster://') {
+    const tokens = url.slice(16).split('+');
+    const rootNodes = tokens[0].split(',');
+    let nodeAddressMap: { [address: string]: { host: string, port: number } } | undefined = undefined;
+    if (tokens.length > 1) {
+      nodeAddressMap = {};
+      tokens[1].split(',').forEach(kv => {
+        const [key, hostPort] = kv.split('=');
+        if (key && hostPort) {
+          const [host, port] = hostPort.split(':');
+          if (host && port) {
+            nodeAddressMap![key] = {
+              host,
+              port: parseInt(port)
+            };
+          }
+        }
+      });
+    }
+    client = redis.createCluster({
+      rootNodes: rootNodes.map(rootNodeURL => ({
+        url: rootNodeURL
+      })),
+      nodeAddressMap
+    });
+  }
+  else {
+    client = redis.createClient({ url });
+  }
   await client.connect();
   return client;
 }
@@ -12,41 +48,51 @@ export async function prepareRedisClient(url: string): Promise<redis.RedisClient
 export class SSetRedis implements SSetDB {
 
   /** Our link with redis */
-  private redisClient: redis.RedisClientType;
+  private redisClient: redis.RedisClientType | redis.RedisClusterType;
 
-  constructor(redisClient: redis.RedisClientType) {
+  constructor(redisClient: redis.RedisClientType | redis.RedisClusterType) {
     this.redisClient = redisClient;
   }
 
   /** Format the Redis keys */
   static key(db: string, key: string[]): string {
-    return 'SSET:' + db + '/' + key.map(encodeURIComponent).join(':');
+    return '{SSET:' + db + '}/' + key.map(encodeURIComponent).join(':');
   }
 
   /** @inheritdoc */
   process<T>(ops: SSetOp<T>[]): Promise<any> {
+    const groups: { [db: string]: SSetOp<T>[] } = {};
     for (let op of ops) {
       if (!op.id || !op.id.length || !op.keep)
         throw new Error('Invalid $SSET operation for ' + JSON.stringify(op));
-    }
-    let multi = this.redisClient.multi();
-    for (let op of ops) {
-      const key = SSetRedis.key(op.db, op.id);
-      const score = op.score;
-      const value = JSON.stringify(op.value);
-      multi = multi.zAdd(key, { score, value }, { 'GT': true });
-      switch (op.keep) {
-        case "ALL_VALUES":
-          break;
-        case "LAST_VALUE":
-          multi = multi.zRemRangeByRank(key, 0, -2);
-          break;
-        default:
-          // In case the user gives a wrong value for keep
-          throw new Error('Unsupported value for $SSET "keep" field: ' + op.keep);
+      if (!groups[op.db]) {
+        groups[op.db] = [op];
+      }
+      else {
+        groups[op.db].push(op);
       }
     }
-    return multi.exec();
+    const promises: Promise<any>[] = Object.keys(groups).map(db => {
+      let multi = this.redisClient.multi();
+      for (let op of ops) {
+        const key = SSetRedis.key(op.db, op.id);
+        const score = op.score;
+        const value = JSON.stringify(op.value);
+        multi = multi.zAdd(key, { score, value }, { 'GT': true });
+        switch (op.keep) {
+          case "ALL_VALUES":
+            break;
+          case "LAST_VALUE":
+            multi = multi.zRemRangeByRank(key, 0, -2);
+            break;
+          default:
+            // In case the user gives a wrong value for keep
+            throw new Error('Unsupported value for $SSET "keep" field: ' + op.keep);
+        }
+      }
+      return multi.exec();
+    });
+    return Promise.all(promises);
   }
 
   private async rangeBy<T>(by: 'SCORE' | 'INDEX', db: string, id: string[], query: SSetRangeQuery): Promise<SSetRangeResponse<T>> {
@@ -101,7 +147,7 @@ export class SSetRedis implements SSetDB {
   }
 }
 
-async function zRange(redisClient: redis.RedisClientType, withScore: boolean, key: string, min: number, max: number, options: any) {
+async function zRange(redisClient: redis.RedisClientType | redis.RedisClusterType, withScore: boolean, key: string, min: number, max: number, options: any) {
   if (withScore) {
     return redisClient.zRangeWithScores(key, min, max, options)
   }
