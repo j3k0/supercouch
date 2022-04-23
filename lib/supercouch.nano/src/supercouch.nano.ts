@@ -1,10 +1,10 @@
 import { SSetRedis } from "supercouch.sset.redis";
 import type * as nano from "nano";
-import type { RedisClientType } from "redis";
+import type { RedisClientType, RedisClusterType } from "redis";
 import { SSetDB } from "supercouch.sset";
 
 export type SuperCouchConfig = {
-  redisClient?: RedisClientType;
+  redisClient?: RedisClientType | RedisClusterType;
 }
 
 export interface DocumentViewParams extends nano.DocumentViewParams {
