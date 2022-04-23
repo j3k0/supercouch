@@ -80,8 +80,8 @@ const users = await nano.view("design", "view", {
 _See [lib/supercouch.nano](https://github.com/j3k0/supercouch/tree/master/lib/supercouch.nano) for details about the NodeJS interface._
 
 Or the equivalent right from Redis:
- * `ZRANGE SSET:Users/myUserId -1 -1` &rArr; Array of JSON-encoded users.
- * `ZRANGE SSET:UsersIndex/ByDate 1649052410191 1649056002596 BYSCORE` &rArr; Array of JSON-encoded users.
+ * `ZRANGE {SSET:Users}/myUserId -1 -1` &rArr; Array of JSON-encoded users.
+ * `ZRANGE {SSET:UsersIndex}/ByDate 1649052410191 1649056002596 BYSCORE` &rArr; Array of JSON-encoded users.
 
 ## Installing on your Server
 
@@ -168,7 +168,7 @@ Total: **113 ms** (_210x faster_)
   * For cleanups, make use the `database` field (or a prefix).
   * Update the view with a new prefix for this field. The view will be regenerated from scratch, i.e. without processing the content of deleted documents.
   * Update your app to access data using this prefix. Ideally, store the "live" prefix in Redis, so no app reload is needed.
-  * Flush all data from "SSET:OldPrefix*".
+  * Flush all data from "{SSET:OldPrefix}*".
 * While supercouch only supports Redis, it's meant to be extensible.
 
 ## Ideas

@@ -1,6 +1,6 @@
 {
   "name": "supercouch.qs",
-  "version": "1.0.1",
+  "version": "1.0.5",
   "description": "CouchDB Query Server with an SSet Database (cf relax.sset)",
   "main": "build/supercouch.js",
   "scripts": {
@@ -16,8 +16,8 @@
     "redis": "^4.0.4",
     "relax.sset": "^0.1.0",
     "source-map-support": "^0.5.21",
-    "supercouch.sset": "^0.5.1",
-    "supercouch.sset.redis": "^0.5.1",
+    "supercouch.sset": "^0.6.1",
+    "supercouch.sset.redis": "^0.7.0",
     "typescript": "^4.6.2"
   }
 }
