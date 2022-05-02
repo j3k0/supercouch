@@ -8,7 +8,7 @@ import * as redis from "redis";
  *   where each root node url is a redis url.
  *   It can be followed with a "+" sign and the node address map in this format: "<address>=<host>:<port>,<address>=<host>:,<port>,..."
  *   See https://github.com/redis/node-redis/blob/master/docs/clustering.md for details.
- */
+ *
 export async function prepareRedisClient(url: string): Promise<redis.RedisClientType | redis.RedisClusterType> {
   let client: redis.RedisClientType | redis.RedisClusterType;
   if (url.slice(0, 16) === 'redis-cluster://') {
@@ -43,6 +43,7 @@ export async function prepareRedisClient(url: string): Promise<redis.RedisClient
   await client.connect();
   return client;
 }
+*/
 
 /** A SuperCouch Sorted Database implemented with Redis */
 export class SSetRedis implements SSetDB {
