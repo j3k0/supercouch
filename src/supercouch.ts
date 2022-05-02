@@ -2,7 +2,9 @@ import * as readline from 'node:readline';
 import { stdin, stdout } from 'node:process';
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { SSetDB, SSetKeepOption, SSetOp } from 'supercouch.sset';
-import { prepareRedisClient, SSetRedis } from 'supercouch.sset.redis';
+import { SSetRedis } from 'supercouch.sset.redis';
+import * as redis from 'redis';
+import { createRedisClientOrCluster  } from 'redis-cluster-url';
 import { md5 } from './md5';
 
 const SSET_KEY = '$SSET';
@@ -319,6 +321,12 @@ function reduceDocs(fn: string, docs: EmitDoc[]): any {
 function reReduceDocs(fn: string, docs: any[]): any {
   // TODO: this is unsupported
   return null;
+}
+
+export async function prepareRedisClient(url: string): Promise<redis.RedisClientType | redis.RedisClusterType> {
+  const client = createRedisClientOrCluster(url);
+  await client.connect();
+  return client;
 }
 
 main(process.argv);
