@@ -1,7 +1,7 @@
 import { SSetRedis } from "supercouch.sset.redis";
 import type * as nano from "nano";
 import type { RedisClientType, RedisClusterType } from "redis";
-import { SSetDB } from "supercouch.sset";
+import { SSetDB, SSetKeepOption } from "supercouch.sset";
 
 export type SuperCouchConfig = {
   redisClient?: RedisClientType | RedisClusterType;
@@ -67,6 +67,24 @@ export interface DocumentScope<D> extends nano.DocumentScope<D> {
     params?: DocumentViewParams,
     callback?: nano.Callback<DocumentViewResponse<V,D>>
   ): Promise<DocumentViewResponse<V,D>>;
+
+  /** Emits a document to a supercouch view.
+   *
+   * This is generally used to enrich an existing document, to cache stuff that otherwise would have to be computed from the global state.
+   */
+  emit<V>(
+    designName: string,
+    viewName: string,
+    emits: DocumentViewEmit<V>[],
+    callback?: nano.Callback<'ok'>
+  ): Promise<'ok'>
+}
+
+export interface DocumentViewEmit<V> {
+  key: string[],
+  value: V,
+  score: number,
+  keep: SSetKeepOption,
 }
 
 /**
@@ -148,7 +166,25 @@ export function supercouch<D>(db: nano.DocumentScope<D>, config: SuperCouchConfi
         // console.log("calling db_view");
         return ret._couchView<V>(ddoc, viewName, params, callback);
     }
-  }
+  };
+
+  (ret as any).emit = async function<V>(_designName: string, _viewName: string, emits: DocumentViewEmit<V>[], callback?: nano.Callback<'ok'>): Promise<'ok' | undefined> {
+    try {
+      await sSetDB.process<V>(emits.map(emit => {
+        const [_marker, db, ...id] = emit.key;
+        return {db, id, keep: emit.keep, score: emit.score, value: emit.value}
+      }));
+      if (callback) process.nextTick(() => callback(null, 'ok'));
+      return 'ok';
+    }
+    catch (err) {
+      if (callback)
+        process.nextTick(() => callback(err as Error, 'ok'));
+      else
+        throw err;
+    }
+  };
+
   return ret;
 }
 
