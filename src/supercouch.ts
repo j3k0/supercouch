@@ -306,7 +306,7 @@ global.log = function (str) {
 
 function createSyslogClient(syslogURL: string) {
   const url = new URL(syslogURL);
-  if (url.protocol !== 'tcp') {
+  if (url.protocol.slice(0,3) !== 'tcp') {
     superLog(LogLevel.WARN, 'Only syslog over tcp is supported, set syslogURL to tcp://xxx');
     superLog(LogLevel.INFO, 'Falling back to the file logger');
     // process.exit(1) ??
