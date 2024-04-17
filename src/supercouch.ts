@@ -4,6 +4,11 @@ import { appendFileSync, writeFileSync } from 'node:fs';
 import { SSetDB, SSetKeepOption, SSetOp } from 'supercouch.sset';
 import { SSetRedis } from 'supercouch.sset.redis';
 import * as redis from 'redis';
+
+import * as syslog from 'syslog';
+interface syslog { createClient: (port: number, host: string, options: any) => SyslogClient; }
+interface SyslogClient { log: (message: string, level?: number) => void; }
+
 import { createRedisClientOrCluster  } from 'redis-cluster-url';
 import { md5 } from './md5';
 
@@ -31,13 +36,16 @@ let mapFunctions: {
 
 let state: QueryServerState = {}; state;
 let sSetDB: SSetDB;
+let syslogClient: SyslogClient | undefined = undefined;
 
 function usage() {
-  console.error('Usage: node supercouch.js --redis-url redis://localhost:6379 [--emit-sset]');
+  console.error('Usage: node supercouch.js --redis-url redis://localhost:6379 [options...]');
   console.error();
-  console.error(' --emit-sset ......... Emit the $SSET entries to the view. Serves as a backup to rebuild the redis database.');
+  console.error('Options:');
   console.error(' --redis-url [URL] ... Set the URL to connect to Redis.');
+  console.error(' --emit-sset ......... Emit the $SSET entries to the view. Serves as a backup to rebuild the redis database.');
   console.error(' --log-file [PATH] ... Set the path to supercouch log files.');
+  console.error(' --syslog-url [URL] .. Set the URL to syslog server (example: tcp://localhost:514) to enable syslog logging.');
   console.error(' --verbose ........... Write more information to the logs.');
   console.error(' --debug.. ........... Write a crazy amount of debug information to the logs.');
   console.error();
@@ -48,6 +56,7 @@ type Configuration = {
   emitSSet: boolean;
   redisURL: string;
   logFile: string;
+  syslogURL: string;
   verbose: boolean;
   debug: boolean;
 };
@@ -55,6 +64,7 @@ const defaultConfig = {
   emitSSet: false,
   redisURL: '',
   logFile: '',
+  syslogURL: '',
   verbose: false,
   debug: false,
 }
@@ -66,6 +76,10 @@ function parseArguments(argv: string[]): Configuration {
   for (let i = 2; i < argv.length; ++i) {
     if (argv[i] === '--redis-url') {
       ret.redisURL = argv[i + 1];
+      ++i;
+    }
+    else if (argv[i] === '--syslog-url') {
+      ret.syslogURL = argv[i + 1];
       ++i;
     }
     else if (argv[i] === '--log-file') {
@@ -119,6 +133,9 @@ async function main(argv: string[]) {
   }
   else {
     usage();
+  }
+  if (config.syslogURL) {
+    syslogClient = createSyslogClient(config.syslogURL);
   }
 
   const pipe = readline.createInterface({ input: stdin, output: stdout });
@@ -247,6 +264,13 @@ enum LogLevel {
   ERROR = 'E',
 }
 
+const SYSLOG_LEVEL = {
+  'D': syslog.LOG_DEBUG,
+  'E': syslog.LOG_ERROR,
+  'W': syslog.LOG_WARNING,
+  'I': syslog.LOG_INFO,
+}
+
 global.emit = function (key, value) {
   // dlog("emit: " + JSON.stringify({key, value}));
   if (key === null || key === undefined)
@@ -260,12 +284,14 @@ global.emit = function (key, value) {
 }
 
 function superLog(level: LogLevel, str: string) {
-  const line = '[supercouch] ' + level + '/ ' + new Date().toISOString() + ' ' + str;
-  if (config.logFile) {
-    appendFileSync(config.logFile, line + '\n');
+  if (syslogClient) {
+    syslogClient.log(str, SYSLOG_LEVEL[level]);
   }
-  else {
-    console.error(line);
+  if (config.logFile) {
+    appendFileSync(config.logFile, '[supercouch] ' + level + '/ ' + new Date().toISOString() + ' ' + str + '\n');
+  }
+  if (!syslogClient && !config.logFile) {
+    console.error('[supercouch] ' + level + '/ ' + new Date().toISOString() + ' ' + str);
   }
 }
 
@@ -276,6 +302,22 @@ function debugLog(str: string) {
 global.log = function (str) {
   debugLog(str);
   // console.log(JSON.stringify(["log", str]));
+}
+
+function createSyslogClient(syslogURL: string) {
+  const url = new URL(syslogURL);
+  if (url.protocol !== 'tcp') {
+    superLog(LogLevel.WARN, 'Only syslog over tcp is supported, set syslogURL to tcp://xxx');
+    superLog(LogLevel.INFO, 'Falling back to the file logger');
+    // process.exit(1) ??
+    return undefined;
+  }
+  const port = parseInt(url.port || '514');
+  const hostname = url.hostname || 'localhost';
+  const options = {
+    name: 'supercouch',
+  };
+  return syslog.createClient(port, hostname, options);
 }
 
 async function mapDoc(map: Function, doc: object): Promise<any[]> {
