@@ -1,6 +1,6 @@
 {
   "name": "supercouch.qs",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "CouchDB Query Server with an SSet Database (cf relax.sset)",
   "main": "build/supercouch.js",
   "scripts": {
