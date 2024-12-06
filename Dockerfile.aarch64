@@ -1,7 +1,7 @@
 # A couchdb server with the supercouch extension installed
 
 # Check dockerhub for the latest
-FROM apache/couchdb:3.2.1
+FROM apache/couchdb:3.4.2
 
 # Check nodejs.org for the latest
 ARG NODE_VERSION=v16.14.2
