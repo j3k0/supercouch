@@ -235,8 +235,15 @@ async function processQuery(line: any[]): Promise<any> {
   }
   catch (uErr) {
     const err = uErr as unknown as Error;
-    if (err.message) superLog(LogLevel.ERROR, err.message);
-    if (err.stack) superLog(LogLevel.ERROR, err.stack);
+    const context = {
+      command: line[0],
+      args: line.slice(1),
+      timestamp: new Date().toISOString(),
+      mapFunctionsCount: mapFunctions?.length || 0,
+    };
+    superLog(LogLevel.ERROR, `Error context: ${JSON.stringify(context)}`);
+    if (err.message) superLog(LogLevel.ERROR, `Error message: ${err.message}`);
+    if (err.stack) superLog(LogLevel.ERROR, `Stack trace: ${err.stack}`);
     return ["error", "processing_failed", 'message' in err ? err.message : 'unknown message'];
   }
 }
@@ -284,14 +291,17 @@ global.emit = function (key, value) {
 }
 
 function superLog(level: LogLevel, str: string) {
-  if (syslogClient) {
-    syslogClient.log(str, SYSLOG_LEVEL[level]);
-  }
-  if (config.logFile) {
-    appendFileSync(config.logFile, '[supercouch] ' + level + '/ ' + new Date().toISOString() + ' ' + str + '\n');
-  }
-  if (!syslogClient && !config.logFile) {
-    console.error('[supercouch] ' + level + '/ ' + new Date().toISOString() + ' ' + str);
+  const lines = str.split('\n');
+  for (const line of lines) {
+    if (syslogClient) {
+      syslogClient.log(line, SYSLOG_LEVEL[level]); 
+    }
+    if (config.logFile) {
+      appendFileSync(config.logFile, '[supercouch] ' + level + '/ ' + new Date().toISOString() + ' ' + line + '\n');
+    }
+    if (!syslogClient && !config.logFile) {
+      console.error('[supercouch] ' + level + '/ ' + new Date().toISOString() + ' ' + line);
+    }
   }
 }
 
@@ -300,7 +310,8 @@ function debugLog(str: string) {
 }
 
 global.log = function (str) {
-  debugLog(str);
+  const stackTrace = new Error().stack?.split('\n').slice(2,4).join(' ← ');
+  debugLog(str + ' ← ' + stackTrace);
   // console.log(JSON.stringify(["log", str]));
 }
 
@@ -323,7 +334,22 @@ function createSyslogClient(syslogURL: string) {
 async function mapDoc(map: Function, doc: object): Promise<any[]> {
 
   if (config.debug) superLog(LogLevel.INFO, '' + doc['_id'] + ' ' + (doc['type'] || ''));
-  map(doc);
+  
+  try {
+    map(doc);
+  } catch (uErr) {
+    const err = uErr as unknown as Error;
+    const context = {
+      docId: doc['_id'],
+      docType: doc['type'],
+      docSize: JSON.stringify(doc).length,
+      timestamp: new Date().toISOString(),
+    };
+    superLog(LogLevel.ERROR, `Map function error context: ${JSON.stringify(context)}`);
+    if (err.message) superLog(LogLevel.ERROR, `Error message: ${err.message}`);
+    if (err.stack) superLog(LogLevel.ERROR, `Stack trace: ${err.stack}`);
+    throw err; // Re-throw to be caught by processQuery
+  }
 
   if (config.verbose) superLog(LogLevel.INFO, '' + doc['_id'] + ' ' + (doc['type'] || '') + ' => ' + emits.length + ' emits');
   const ret: any[] = [];
