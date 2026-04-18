@@ -12,11 +12,10 @@ import * as redis from "redis";
  */
 export class KVRedis implements KVDB {
 
-  // @ts-ignore - intentional skeleton, implementation in subsequent tasks
-  private _redisClient: redis.RedisClientType | redis.RedisClusterType;
+  private redisClient: redis.RedisClientType | redis.RedisClusterType;
 
   constructor(redisClient: redis.RedisClientType | redis.RedisClusterType) {
-    this._redisClient = redisClient;
+    this.redisClient = redisClient;
   }
 
   /** Build the Redis key for a given (db, id). */
@@ -45,7 +44,7 @@ export class KVRedis implements KVDB {
 
     const promises: Promise<any>[] = Object.keys(groups).map(db => {
       const dbOps = groups[db];
-      let multi = this._redisClient.multi();
+      let multi = this.redisClient.multi();
       let wrote = false;
       for (const op of dbOps) {
         if (op.expiresAt !== undefined && op.expiresAt <= nowSec) {
@@ -54,9 +53,9 @@ export class KVRedis implements KVDB {
         const key = KVRedis.key(op.db, op.id);
         const value = JSON.stringify(op.value);
         if (op.expiresAt === undefined) {
-          multi = multi.set(key, value) as typeof multi;
+          multi = multi.set(key, value);
         } else {
-          multi = multi.set(key, value, { EX: op.expiresAt - nowSec }) as typeof multi;
+          multi = multi.set(key, value, { EX: op.expiresAt - nowSec });
         }
         wrote = true;
       }
