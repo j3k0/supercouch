@@ -25,8 +25,45 @@ export class KVRedis implements KVDB {
   }
 
   /** @inheritdoc */
-  process<T>(_ops: KVOp<T>[]): Promise<void> {
-    throw new Error('KVRedis.process not yet implemented');
+  async process<T>(ops: KVOp<T>[]): Promise<void> {
+    const groups: { [db: string]: KVOp<T>[] } = {};
+    for (const op of ops) {
+      if (!op.id || !op.id.length) {
+        throw new Error('Invalid $KV operation: missing id — ' + JSON.stringify(op));
+      }
+      if (op.expiresAt !== undefined &&
+          (typeof op.expiresAt !== 'number' ||
+           !isFinite(op.expiresAt) ||
+           op.expiresAt < 0)) {
+        throw new Error('Invalid $KV operation: invalid expiresAt — ' + JSON.stringify(op));
+      }
+      if (!groups[op.db]) groups[op.db] = [];
+      groups[op.db].push(op);
+    }
+
+    const nowSec = Math.floor(Date.now() / 1000);
+
+    const promises: Promise<any>[] = Object.keys(groups).map(db => {
+      const dbOps = groups[db];
+      let multi = this._redisClient.multi();
+      let wrote = false;
+      for (const op of dbOps) {
+        if (op.expiresAt !== undefined && op.expiresAt <= nowSec) {
+          continue; // silent skip per contract
+        }
+        const key = KVRedis.key(op.db, op.id);
+        const value = JSON.stringify(op.value);
+        if (op.expiresAt === undefined) {
+          multi = multi.set(key, value) as typeof multi;
+        } else {
+          multi = multi.set(key, value, { EX: op.expiresAt - nowSec }) as typeof multi;
+        }
+        wrote = true;
+      }
+      return wrote ? multi.exec() : Promise.resolve([]);
+    });
+
+    await Promise.all(promises);
   }
 
   /** @inheritdoc */
