@@ -66,8 +66,20 @@ export class KVRedis implements KVDB {
   }
 
   /** @inheritdoc */
-  get<T>(_db: string, _id: string[], _options?: KVGetOptions): Promise<KVEntry<T> | undefined> {
-    throw new Error('KVRedis.get not yet implemented');
+  async get<T>(db: string, id: string[], options?: KVGetOptions): Promise<KVEntry<T> | undefined> {
+    const key = KVRedis.key(db, id);
+    if (options?.includeExpiresAt === false) {
+      const raw = await this.redisClient.get(key);
+      return raw == null ? undefined : { value: JSON.parse(raw) as T };
+    }
+    // Pipeline GET + PTTL in one round-trip to avoid a TTL/GET race.
+    const results = await this.redisClient.multi().get(key).pTTL(key).exec() as [string | null, number];
+    const raw = results[0];
+    const pttlMs = results[1];
+    if (raw == null) return undefined;            // PTTL returns -2 for absent keys
+    const value = JSON.parse(raw) as T;
+    if (pttlMs === -1) return { value };          // persistent
+    return { value, expiresAt: Math.floor(Date.now() / 1000 + pttlMs / 1000) };
   }
 
   /** @inheritdoc */
