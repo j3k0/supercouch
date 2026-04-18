@@ -91,3 +91,102 @@ describe('KVRedis.process — happy path', () => {
     td.verify((redisClient as any).multi(), { times: 0 });
   });
 });
+
+describe('KVRedis.process — silent skip when expiresAt in the past', () => {
+  let redisClient: RedisClientType;
+  beforeEach(() => { redisClient = td.object<RedisClientType>() as RedisClientType; });
+
+  it('silently skips an op with expiresAt in the past — no MULTI created', async () => {
+    // When every op is expired, process() should NOT start a MULTI.
+    // This matters operationally: re-indexes replay millions of past ops.
+    const pastMulti = buildMulti();
+    td.when((redisClient as any).multi()).thenReturn(pastMulti);
+
+    const kv = new KVRedis(redisClient);
+    const pastSec = Math.floor(Date.now() / 1000) - 10;
+    await kv.process([{ db: 'mydb', id: ['x'], value: 1, expiresAt: pastSec }]);
+
+    // No SET was queued.
+    assert.strictEqual((pastMulti as any).calls.length, 0);
+  });
+
+  it('mixes live and expired ops in the same batch — only live ones written', async () => {
+    const multi = buildMulti();
+    td.when((redisClient as any).multi()).thenReturn(multi);
+
+    const kv = new KVRedis(redisClient);
+    const nowSec = Math.floor(Date.now() / 1000);
+    await kv.process([
+      { db: 'mydb', id: ['expired'], value: 'skip', expiresAt: nowSec - 1 },
+      { db: 'mydb', id: ['live'], value: 'keep', expiresAt: nowSec + 3600 },
+      { db: 'mydb', id: ['exact-now'], value: 'skip', expiresAt: nowSec },
+    ]);
+
+    // Only the "live" op made it into MULTI.
+    assert.strictEqual((multi as any).calls.length, 1);
+    assert.strictEqual((multi as any).calls[0].key, '{KV:mydb}/live');
+  });
+});
+
+describe('KVRedis.process — validation errors', () => {
+  let redisClient: RedisClientType;
+  beforeEach(() => { redisClient = td.object<RedisClientType>() as RedisClientType; });
+
+  it('throws when id is missing', async () => {
+    const kv = new KVRedis(redisClient);
+    await assert.rejects(
+      () => kv.process([{ db: 'mydb', id: undefined as any, value: 1 }]),
+      /missing id/,
+    );
+  });
+
+  it('throws when id is an empty array', async () => {
+    const kv = new KVRedis(redisClient);
+    await assert.rejects(
+      () => kv.process([{ db: 'mydb', id: [], value: 1 }]),
+      /missing id/,
+    );
+  });
+
+  it('throws when expiresAt is NaN', async () => {
+    const kv = new KVRedis(redisClient);
+    await assert.rejects(
+      () => kv.process([{ db: 'mydb', id: ['x'], value: 1, expiresAt: NaN }]),
+      /invalid expiresAt/,
+    );
+  });
+
+  it('throws when expiresAt is negative', async () => {
+    const kv = new KVRedis(redisClient);
+    await assert.rejects(
+      () => kv.process([{ db: 'mydb', id: ['x'], value: 1, expiresAt: -100 }]),
+      /invalid expiresAt/,
+    );
+  });
+
+  it('throws when expiresAt is Infinity', async () => {
+    const kv = new KVRedis(redisClient);
+    await assert.rejects(
+      () => kv.process([{ db: 'mydb', id: ['x'], value: 1, expiresAt: Infinity }]),
+      /invalid expiresAt/,
+    );
+  });
+
+  it('validation runs before MULTI — no partial application', async () => {
+    // A valid op followed by an invalid one should throw WITHOUT ever
+    // starting a MULTI transaction.
+    const multi = buildMulti();
+    td.when((redisClient as any).multi()).thenReturn(multi);
+
+    const kv = new KVRedis(redisClient);
+    await assert.rejects(
+      () => kv.process([
+        { db: 'mydb', id: ['valid'], value: 1 },
+        { db: 'mydb', id: ['invalid'], value: 2, expiresAt: NaN },
+      ]),
+      /invalid expiresAt/,
+    );
+    // MULTI was never started; even the "valid" op didn't reach Redis.
+    assert.strictEqual((multi as any).calls.length, 0);
+  });
+});
