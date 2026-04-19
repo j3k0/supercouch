@@ -3,6 +3,8 @@ import { stdin, stdout } from 'node:process';
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { SSetDB, SSetKeepOption, SSetOp } from 'supercouch.sset';
 import { SSetRedis } from 'supercouch.sset.redis';
+import { KVDB, KVOp } from 'supercouch.kv';
+import { KVRedis } from 'supercouch.kv.redis';
 import * as redis from 'redis';
 
 import * as syslog from 'syslog';
@@ -13,6 +15,7 @@ import { createRedisClientOrCluster  } from 'redis-cluster-url';
 import { md5 } from './md5';
 
 const SSET_KEY = '$SSET';
+const KV_KEY = '$KV';
 
 /*
  * Types
@@ -36,6 +39,7 @@ let mapFunctions: {
 
 let state: QueryServerState = {}; state;
 let sSetDB: SSetDB;
+let kvDB: KVDB;
 let syslogClient: SyslogClient | undefined = undefined;
 
 function usage() {
@@ -44,6 +48,7 @@ function usage() {
   console.error('Options:');
   console.error(' --redis-url [URL] ... Set the URL to connect to Redis.');
   console.error(' --emit-sset ......... Emit the $SSET entries to the view. Serves as a backup to rebuild the redis database.');
+  console.error(' --emit-kv ........... Emit the $KV entries to the view. Serves as a backup to rebuild the redis database.');
   console.error(' --log-file [PATH] ... Set the path to supercouch log files.');
   console.error(' --syslog-url [URL] .. Set the URL to syslog server (example: tcp://localhost:514) to enable syslog logging.');
   console.error(' --verbose ........... Write more information to the logs.');
@@ -54,6 +59,7 @@ function usage() {
 
 type Configuration = {
   emitSSet: boolean;
+  emitKV: boolean;
   redisURL: string;
   logFile: string;
   syslogURL: string;
@@ -62,6 +68,7 @@ type Configuration = {
 };
 const defaultConfig = {
   emitSSet: false,
+  emitKV: false,
   redisURL: '',
   logFile: '',
   syslogURL: '',
@@ -88,6 +95,9 @@ function parseArguments(argv: string[]): Configuration {
     }
     else if (argv[i] === '--emit-sset') {
       ret.emitSSet = true;
+    }
+    else if (argv[i] === '--emit-kv') {
+      ret.emitKV = true;
     }
     else if (argv[i] === '--debug') {
       ret.debug = true;
@@ -129,7 +139,9 @@ async function main(argv: string[]) {
 
   config = parseArguments(argv);
   if (config.redisURL) {
-    sSetDB = new SSetRedis(await prepareRedisClient(config.redisURL));
+    const client = await prepareRedisClient(config.redisURL);
+    sSetDB = new SSetRedis(client);
+    kvDB = new KVRedis(client as any);
   }
   else {
     usage();
@@ -353,12 +365,13 @@ async function mapDoc(map: Function, doc: object): Promise<any[]> {
 
   if (config.verbose) superLog(LogLevel.INFO, '' + doc['_id'] + ' ' + (doc['type'] || '') + ' => ' + emits.length + ' emits');
   const ret: any[] = [];
-  const ops: SSetOp<any>[] = [];
+  const ssetOps: SSetOp<any>[] = [];
+  const kvOps: KVOp<any>[] = [];
 
-  // Extract and process $SSET emits.
+  // Extract and process $SSET and $KV emits.
   //
-  // They are formatted this way:
-  // [["$SSET", <db>, <id>...],{keep, score, value}]
+  // $SSET format: [["$SSET", <db>, <id>...], {keep, score, value}]
+  // $KV format:   [["$KV",   <db>, <id>...], {value, expiresAt}]
   emits.forEach(kv => {
     let shouldEmit = true;
     if (kv?.[0]?.length >= 3 && typeof kv[0][0] === 'string') {
@@ -366,8 +379,14 @@ async function mapDoc(map: Function, doc: object): Promise<any[]> {
       if (marker === SSET_KEY && typeof kv[1] === 'object') {
         const { value, score, keep } = kv[1];
         if (keep && db && id && typeof score === 'number') {
-          ops.push({ keep: keep as unknown as SSetKeepOption, db, id, score, value });
+          ssetOps.push({ keep: keep as unknown as SSetKeepOption, db, id, score, value });
           shouldEmit = config.emitSSet;
+        }
+      } else if (marker === KV_KEY && typeof kv[1] === 'object') {
+        const { value, expiresAt } = kv[1];
+        if (db && id && id.length > 0) {
+          kvOps.push({ db, id, value, expiresAt });
+          shouldEmit = config.emitKV;
         }
       }
     }
@@ -376,8 +395,10 @@ async function mapDoc(map: Function, doc: object): Promise<any[]> {
   });
 
   emits = [];
-  if (ops.length > 0)
-    await sSetDB.process(ops);
+  await Promise.all([
+    ssetOps.length > 0 ? sSetDB.process(ssetOps) : Promise.resolve(),
+    kvOps.length > 0 ? kvDB.process(kvOps) : Promise.resolve(),
+  ]);
   return ret;
 }
 
