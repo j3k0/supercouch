@@ -83,7 +83,30 @@ export class KVRedis implements KVDB {
   }
 
   /** @inheritdoc */
-  mget<T>(_db: string, _ids: string[][], _options?: KVGetOptions): Promise<(KVEntry<T> | undefined)[]> {
-    throw new Error('KVRedis.mget not yet implemented');
+  async mget<T>(db: string, ids: string[][], options?: KVGetOptions): Promise<(KVEntry<T> | undefined)[]> {
+    if (!ids.length) return [];
+    const keys = ids.map(id => KVRedis.key(db, id));
+
+    if (options?.includeExpiresAt === false) {
+      const raws = await (this.redisClient as any).mGet(keys) as (string | null)[];
+      return raws.map(raw => raw == null ? undefined : { value: JSON.parse(raw) as T });
+    }
+
+    // Pipeline N × (GET + PTTL). All keys share the {KV:<db>} hash tag,
+    // so the MULTI stays on a single cluster slot.
+    let multi = this.redisClient.multi();
+    for (const k of keys) {
+      multi = multi.get(k).pTTL(k);
+    }
+    const results = await multi.exec() as (string | null | number)[];
+    const nowSec = Math.floor(Date.now() / 1000);
+    return ids.map((_id, i) => {
+      const raw = results[i * 2] as string | null;
+      const pttlMs = results[i * 2 + 1] as number;
+      if (raw == null) return undefined;
+      const value = JSON.parse(raw) as T;
+      if (pttlMs === -1) return { value };
+      return { value, expiresAt: Math.floor(nowSec + pttlMs / 1000) };
+    });
   }
 }
