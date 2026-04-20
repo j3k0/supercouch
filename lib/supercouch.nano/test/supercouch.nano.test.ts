@@ -139,6 +139,16 @@ describe('.view — $KV', () => {
     );
   });
 
+  it('throws when a keys batch mixes $SSET and $KV markers', async () => {
+    const {dbx} = testbed();
+    await assert.rejects(
+      () => dbx.view('designName', 'viewName', {
+        keys: [["$SSET", "DB", "a"], ["$KV", "DB", "b"]],
+      } as any),
+      /mixed markers/,
+    );
+  });
+
   it('include_expires_at: false skips the PTTL pipeline and uses MGET', async () => {
     const {dbx, redisClient} = testbed();
     td.when((redisClient as any).mGet(['{KV:DB}/x', '{KV:DB}/y']))

@@ -137,7 +137,6 @@ export function supercouch<D>(db: nano.DocumentScope<D>, config: SuperCouchConfi
     const options = {
       withScores: params.include_scores ?? true,
       withTotalRows: params.include_total_rows ?? true,
-      withExpiresAt: params.include_expires_at ?? true,
     };
 
     // Check if it's a supercouch query and process it
@@ -252,13 +251,21 @@ export function supercouch<D>(db: nano.DocumentScope<D>, config: SuperCouchConfi
  * CouchDB's native view. */
 function getQueryType(qs: nano.DocumentViewParams): 'keys' | 'range' | 'kv-keys' | null {
 
-  // $SSET batch keys (unchanged)
-  if (qs.keys && qs.keys[0] && qs.keys[0][0] === "$SSET")
-    return 'keys';
+  // Batch keys: all entries must share the same marker. Heterogeneous
+  // markers are rejected since each marker routes to a different backend.
+  if (qs.keys && qs.keys[0]) {
+    const firstMarker = qs.keys[0][0];
+    if (firstMarker === "$SSET" || firstMarker === "$KV") {
+      for (let i = 1; i < qs.keys.length; ++i) {
+        if (qs.keys[i]?.[0] !== firstMarker) {
+          throw new Error('SuperCouch: mixed markers in a single keys batch are not supported (' + firstMarker + ' / ' + qs.keys[i]?.[0] + '). Split the query per marker.');
+        }
+      }
+      return firstMarker === "$SSET" ? 'keys' : 'kv-keys';
+    }
+  }
 
-  // $KV point or batch keys (new)
-  if (qs.keys && qs.keys[0] && qs.keys[0][0] === "$KV")
-    return 'kv-keys';
+  // $KV single point lookup via `key` param.
   const singleKey = (qs as any).key;
   if (singleKey && Array.isArray(singleKey) && singleKey[0] === "$KV")
     return 'kv-keys';
