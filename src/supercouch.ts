@@ -141,7 +141,7 @@ async function main(argv: string[]) {
   if (config.redisURL) {
     const client = await prepareRedisClient(config.redisURL);
     sSetDB = new SSetRedis(client);
-    kvDB = new KVRedis(client as any);
+    kvDB = new KVRedis(client);
   }
   else {
     usage();
