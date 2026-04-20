@@ -376,17 +376,17 @@ async function mapDoc(map: Function, doc: object): Promise<any[]> {
     let shouldEmit = true;
     if (kv?.[0]?.length >= 3 && typeof kv[0][0] === 'string') {
       const [marker, db, ...id] = kv[0] as string[];
-      if (marker === SSET_KEY && typeof kv[1] === 'object') {
+      if (marker === SSET_KEY && kv[1] != null && typeof kv[1] === 'object') {
         const { value, score, keep } = kv[1];
         if (keep && db && id && typeof score === 'number') {
           ssetOps.push({ keep: keep as unknown as SSetKeepOption, db, id, score, value });
           shouldEmit = config.emitSSet;
         }
-      } else if (marker === KV_KEY && typeof kv[1] === 'object') {
+      } else if (marker === KV_KEY && kv[1] != null && typeof kv[1] === 'object') {
+        shouldEmit = config.emitKV;
         const { value, expiresAt } = kv[1];
-        if (db && id && id.length > 0) {
+        if (db) {
           kvOps.push({ db, id, value, expiresAt });
-          shouldEmit = config.emitKV;
         }
       }
     }

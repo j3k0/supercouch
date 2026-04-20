@@ -92,4 +92,38 @@ describe('KVRedis.mget', () => {
       { method: 'pTTL', args: ['{KV:mydb}/b'] },
     ]);
   });
+
+  it('uses the same expiresAt formula as get() for the same key state', async () => {
+    // Both get() and mget() should produce identical expiresAt for identical
+    // (now, pttlMs) inputs. Using identical pttl and near-identical Date.now(),
+    // the results should be at most 1 off (clock tick between calls) but
+    // should NOT differ structurally. We verify by stubbing both and comparing.
+    const sharedPttl = 12_345;
+    const multiGet: any = {
+      get(_k: string) { return multiGet; },
+      pTTL(_k: string) { return multiGet; },
+      exec: () => Promise.resolve(['"v"', sharedPttl]),
+    };
+    const multiMget: any = {
+      get(_k: string) { return multiMget; },
+      pTTL(_k: string) { return multiMget; },
+      exec: () => Promise.resolve(['"v"', sharedPttl]),
+    };
+    let call = 0;
+    (redisClient as any).multi = () => call++ === 0 ? multiGet : multiMget;
+
+    const kv = new KVRedis(redisClient);
+    const single = await kv.get<string>('mydb', ['a']);
+    const batch  = await kv.mget<string>('mydb', [['a']]);
+
+    // Both should have populated expiresAt.
+    assert.ok(single?.expiresAt !== undefined);
+    assert.ok(batch[0]?.expiresAt !== undefined);
+    // They should be within 1 second of each other (accounting for a clock
+    // tick between the two Date.now() reads). Pre-fix they could differ by
+    // up to 1s independently of the tick; post-fix the only source of drift
+    // is the actual elapsed time between the two Date.now() calls.
+    const delta = Math.abs(batch[0]!.expiresAt! - single.expiresAt!);
+    assert.ok(delta <= 1, `get/mget expiresAt should be within 1s; got delta=${delta}`);
+  });
 });

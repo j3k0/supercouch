@@ -164,6 +164,48 @@ describe('.view — $KV', () => {
     assert.strictEqual(response.rows[0].value, 'vx');
     assert.strictEqual(response.rows[0].expiresAt, undefined);
   });
+
+  it('forwards getQueryType errors through the callback (callback-style $KV range)', async () => {
+    const {dbx} = testbed();
+    // A $KV range query is unsupported; getQueryType throws. The extended
+    // view() must forward the error through the callback rather than leaving
+    // the promise unresolved from the callback caller's perspective.
+    const callbackErr = await new Promise<any>((resolve) => {
+      (dbx.view as any)('d', 'v',
+        { start_key: ["$KV", "DB", "a"], end_key: ["$KV", "DB", "z"] },
+        (err: any) => resolve(err),
+      );
+    });
+    assert.ok(callbackErr, 'callback should fire with an error');
+    assert.strictEqual((callbackErr as any).name, 'supercouch_error');
+    assert.match((callbackErr as Error).message, /range queries not supported/);
+  });
+
+  it('read path rejects $KV keys with no id component (k.length < 3)', async () => {
+    const {dbx} = testbed();
+    await assert.rejects(
+      () => dbx.view('d', 'v', { keys: [["$KV", "DB"]] } as any),
+      /invalid key in batch/,
+    );
+  });
+
+  it('$KV batch reports total_rows as requested-count (matches $SSET)', async () => {
+    const {dbx, redisClient} = testbed();
+    // 2 keys, 1 hit, 1 miss. Under the fixed behavior, total_rows should be 2.
+    const multi: any = {
+      get(_k: string) { return multi; },
+      pTTL(_k: string) { return multi; },
+      exec: () => Promise.resolve(['"v"', -1, null, -2]),
+    };
+    td.when((redisClient as any).multi()).thenReturn(multi);
+
+    const response: any = await dbx.view('d', 'v', {
+      keys: [["$KV", "DB", "hit"], ["$KV", "DB", "miss"]],
+    } as any);
+
+    assert.strictEqual(response.total_rows, 2, 'total_rows should be input count, not hit count');
+    assert.strictEqual(response.rows.length, 1, 'rows should only include hits');
+  });
 });
 
 describe('.emit — mixed $SSET + $KV', () => {

@@ -27,13 +27,17 @@ export class KVRedis implements KVDB {
   async process<T>(ops: KVOp<T>[]): Promise<void> {
     const groups: { [db: string]: KVOp<T>[] } = {};
     for (const op of ops) {
+      if (op.value === undefined) {
+        throw new Error('Invalid $KV operation: value is undefined — ' + JSON.stringify(op));
+      }
       if (!op.id || !op.id.length) {
         throw new Error('Invalid $KV operation: missing id — ' + JSON.stringify(op));
       }
       if (op.expiresAt !== undefined &&
           (typeof op.expiresAt !== 'number' ||
            !isFinite(op.expiresAt) ||
-           op.expiresAt < 0)) {
+           op.expiresAt < 0 ||
+           !Number.isInteger(op.expiresAt))) {
         throw new Error('Invalid $KV operation: invalid expiresAt — ' + JSON.stringify(op));
       }
       if (!groups[op.db]) groups[op.db] = [];
@@ -99,14 +103,13 @@ export class KVRedis implements KVDB {
       multi = multi.get(k).pTTL(k);
     }
     const results = await multi.exec() as (string | null | number)[];
-    const nowSec = Math.floor(Date.now() / 1000);
     return ids.map((_id, i) => {
       const raw = results[i * 2] as string | null;
       const pttlMs = results[i * 2 + 1] as number;
       if (raw == null) return undefined;
       const value = JSON.parse(raw) as T;
       if (pttlMs === -1) return { value };
-      return { value, expiresAt: Math.floor(nowSec + pttlMs / 1000) };
+      return { value, expiresAt: Math.floor(Date.now() / 1000 + pttlMs / 1000) };
     });
   }
 }

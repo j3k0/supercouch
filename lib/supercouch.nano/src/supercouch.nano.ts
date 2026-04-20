@@ -139,9 +139,27 @@ export function supercouch<D>(db: nano.DocumentScope<D>, config: SuperCouchConfi
       withTotalRows: params.include_total_rows ?? true,
     };
 
-    // Check if it's a supercouch query and process it
-    const type = getQueryType(params);
-    // console.log(params, type);
+    // Check if it's a supercouch query and process it. getQueryType can throw
+    // synchronously ($KV range, mixed-marker keys batch); wrap so callback-style
+    // callers still get their callback invoked instead of an unhandled rejection.
+    let type: 'keys' | 'range' | 'kv-keys' | null;
+    try {
+      type = getQueryType(params);
+    }
+    catch (e) {
+      const requestError: nano.RequestError = new Error('SuperCouch Failed: ' + (e as any).message);
+      requestError.name = 'supercouch_error';
+      requestError.reason = 'invalid_query';
+      requestError.statusCode = 400;
+      if (e instanceof Error) {
+        requestError.stack = e.stack;
+      }
+      if (callback) {
+        process.nextTick(() => callback(requestError, {} as DocumentViewResponse<V, D>));
+        return undefined;
+      }
+      throw requestError;
+    }
     switch (type) {
       case 'keys': {
         try {
@@ -334,7 +352,7 @@ async function processKVKeysQuery<V, D>(
   // Preserve the original index so output aligns with the request order.
   const groups = new Map<string, { index: number; id: string[] }[]>();
   keys.forEach((k, index) => {
-    if (k[0] !== '$KV' || k.length < 2) {
+    if (k[0] !== '$KV' || k.length < 3) {
       throw new Error('$KV: invalid key in batch — ' + JSON.stringify(k));
     }
     const db = k[1];
@@ -360,7 +378,7 @@ async function processKVKeysQuery<V, D>(
   }));
 
   const rows = rowByIndex.filter((r): r is NonNullable<typeof r> => r !== null);
-  return { offset: 0, total_rows: rows.length, rows };
+  return { offset: 0, total_rows: keys.length, rows };
 }
 
 async function processRangeQuery<V, D>(sSetDB: SSetDB, startKey: [...string[], number], endKey: [...string[], number], options: QueryOptions, skip?: number, limit?: number, descending?: boolean): Promise<DocumentViewResponse<V, D>> {

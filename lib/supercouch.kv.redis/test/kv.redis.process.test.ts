@@ -189,4 +189,20 @@ describe('KVRedis.process — validation errors', () => {
     // MULTI was never started; even the "valid" op didn't reach Redis.
     assert.strictEqual((multi as any).calls.length, 0);
   });
+
+  it('throws when value is undefined', async () => {
+    const kv = new KVRedis(redisClient);
+    await assert.rejects(
+      () => kv.process([{ db: 'mydb', id: ['x'], value: undefined as any }]),
+      /value is undefined/,
+    );
+  });
+
+  it('throws when expiresAt is non-integer', async () => {
+    const kv = new KVRedis(redisClient);
+    await assert.rejects(
+      () => kv.process([{ db: 'mydb', id: ['x'], value: 1, expiresAt: 1_700_000_000.5 }]),
+      /invalid expiresAt/,
+    );
+  });
 });
