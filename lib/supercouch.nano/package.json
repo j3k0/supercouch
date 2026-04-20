@@ -20,6 +20,8 @@
     "redis": "*"
   },
   "dependencies": {
+    "supercouch.kv": "file:../supercouch.kv",
+    "supercouch.kv.redis": "file:../supercouch.kv.redis",
     "supercouch.sset": "^0.7.0",
     "supercouch.sset.redis": "^0.8.0"
   },
