@@ -1,7 +1,9 @@
 import { SSetRedis } from "supercouch.sset.redis";
 import type * as nano from "nano";
 import type { RedisClientType, RedisClusterType } from "redis";
-import { SSetDB, SSetKeepOption } from "supercouch.sset";
+import { SSetDB, SSetKeepOption, SSetOp } from "supercouch.sset";
+import { KVDB, KVOp } from "supercouch.kv";
+import { KVRedis } from "supercouch.kv.redis";
 
 export type SuperCouchConfig = {
   redisClient?: RedisClientType | RedisClusterType;
@@ -22,6 +24,14 @@ export interface DocumentViewParams extends nano.DocumentViewParams {
    *
    * @default true */
   include_total_rows?: boolean;
+
+  /** Include the absolute expiry (unix seconds) for "$KV" documents.
+   *
+   * Costs one extra Redis PTTL round-trip per key. Set to false for
+   * performance-sensitive callers that don't need the expiry timestamp.
+   *
+   * @default true */
+  include_expires_at?: boolean;
 }
 
 /** View response.
@@ -36,6 +46,7 @@ export interface DocumentViewResponse<V, D> extends nano.DocumentViewResponse<V,
     key: string;
     value: V;
     score?: number;
+    expiresAt?: number;
     doc?: D & nano.Document;
   }>;
 }
@@ -80,12 +91,21 @@ export interface DocumentScope<D> extends nano.DocumentScope<D> {
   ): Promise<'ok'>
 }
 
-export interface DocumentViewEmit<V> {
-  key: string[],
-  value: V,
-  score: number,
-  keep: SSetKeepOption,
+export interface SSetEmit<V> {
+  key: readonly ["$SSET", string, ...(string | number)[]];
+  value: V;
+  score: number;
+  keep: SSetKeepOption;
 }
+
+export interface KVEmit<V> {
+  key: readonly ["$KV", string, ...(string | number)[]];
+  value: V;
+  /** Optional absolute expiry in unix seconds. */
+  expiresAt?: number;
+}
+
+export type DocumentViewEmit<V> = SSetEmit<V> | KVEmit<V>;
 
 /**
  * Adds SuperCouch powers to a nano.db object
@@ -98,7 +118,8 @@ export interface DocumentViewEmit<V> {
 export function supercouch<D>(db: nano.DocumentScope<D>, config: SuperCouchConfig): DocumentScope<D> {
 
   const sSetDB = config.redisClient ? new SSetRedis(config.redisClient) : null;
-  if (!sSetDB) throw new Error('Please provide either "redisClient" or "redisURL" in supercouch config');
+  const kvDB   = config.redisClient ? new KVRedis(config.redisClient)   : null;
+  if (!sSetDB || !kvDB) throw new Error('Please provide "redisClient" in supercouch config');
 
   const ret = db as DocumentScope<D>;
 
@@ -118,9 +139,27 @@ export function supercouch<D>(db: nano.DocumentScope<D>, config: SuperCouchConfi
       withTotalRows: params.include_total_rows ?? true,
     };
 
-    // Check if it's a supercouch query and process it
-    const type = getQueryType(params);
-    // console.log(params, type);
+    // Check if it's a supercouch query and process it. getQueryType can throw
+    // synchronously ($KV range, mixed-marker keys batch); wrap so callback-style
+    // callers still get their callback invoked instead of an unhandled rejection.
+    let type: 'keys' | 'range' | 'kv-keys' | null;
+    try {
+      type = getQueryType(params);
+    }
+    catch (e) {
+      const requestError: nano.RequestError = new Error('SuperCouch Failed: ' + (e as any).message);
+      requestError.name = 'supercouch_error';
+      requestError.reason = 'invalid_query';
+      requestError.statusCode = 400;
+      if (e instanceof Error) {
+        requestError.stack = e.stack;
+      }
+      if (callback) {
+        process.nextTick(() => callback(requestError, {} as DocumentViewResponse<V, D>));
+        return undefined;
+      }
+      throw requestError;
+    }
     switch (type) {
       case 'keys': {
         try {
@@ -162,6 +201,28 @@ export function supercouch<D>(db: nano.DocumentScope<D>, config: SuperCouchConfi
             throw requestError;
         }
       } break;
+      case 'kv-keys': {
+        try {
+          const keys: string[][] = (params.keys as string[][]) ?? [(params as any).key as string[]];
+          const includeExpiresAt = params.include_expires_at ?? true;
+          const response = await processKVKeysQuery<V, D>(kvDB, keys, { includeExpiresAt });
+          if (callback) process.nextTick(() => callback(null, response));
+          return response;
+        }
+        catch (e) {
+          const requestError: nano.RequestError = new Error('SuperCouch.KV Failed: ' + (e as any).message);
+          requestError.name = 'supercouch_error';
+          requestError.reason = 'kv_keys_query_failed';
+          requestError.statusCode = 500;
+          if (e instanceof Error) {
+            requestError.stack = e.stack;
+          }
+          if (callback)
+            process.nextTick(() => callback(requestError, {} as DocumentViewResponse<V, D>));
+          else
+            throw requestError;
+        }
+      } break;
       default:
         // console.log("calling db_view");
         return ret._couchView<V>(ddoc, viewName, params, callback);
@@ -170,10 +231,24 @@ export function supercouch<D>(db: nano.DocumentScope<D>, config: SuperCouchConfi
 
   (ret as any).emit = async function<V>(_designName: string, _viewName: string, emits: DocumentViewEmit<V>[], callback?: nano.Callback<'ok'>): Promise<'ok' | undefined> {
     try {
-      await sSetDB.process<V>(emits.map(emit => {
-        const [_marker, db, ...id] = emit.key;
-        return {db, id, keep: emit.keep, score: emit.score, value: emit.value}
-      }));
+      const ssetOps: SSetOp<V>[] = [];
+      const kvOps: KVOp<V>[] = [];
+      for (const e of emits) {
+        const [marker, db, ...id] = e.key;
+        if (marker === '$SSET') {
+          const s = e as SSetEmit<V>;
+          ssetOps.push({ db, id: id as string[], keep: s.keep, score: s.score, value: s.value });
+        } else if (marker === '$KV') {
+          const k = e as KVEmit<V>;
+          kvOps.push({ db, id: id as string[], value: k.value, expiresAt: k.expiresAt });
+        } else {
+          throw new Error('Unsupported emit marker: ' + marker);
+        }
+      }
+      await Promise.all([
+        ssetOps.length > 0 ? sSetDB.process(ssetOps) : Promise.resolve(),
+        kvOps.length   > 0 ? kvDB.process(kvOps)    : Promise.resolve(),
+      ]);
       if (callback) process.nextTick(() => callback(null, 'ok'));
       return 'ok';
     }
@@ -192,16 +267,35 @@ export function supercouch<D>(db: nano.DocumentScope<D>, config: SuperCouchConfi
  *
  * This doesn't support mixed types: a single view request will either go to SuperCouch's backend or to
  * CouchDB's native view. */
-function getQueryType(qs: nano.DocumentViewParams): 'keys' | 'range' | null {
+function getQueryType(qs: nano.DocumentViewParams): 'keys' | 'range' | 'kv-keys' | null {
 
-  // console.log({qs});
-  // "keys", used to retrieve the latest state for a bunch of entities
-  if (qs.keys && qs.keys[0] && qs.keys[0][0] === "$SSET")
-    return 'keys';
+  // Batch keys: all entries must share the same marker. Heterogeneous
+  // markers are rejected since each marker routes to a different backend.
+  if (qs.keys && qs.keys[0]) {
+    const firstMarker = qs.keys[0][0];
+    if (firstMarker === "$SSET" || firstMarker === "$KV") {
+      for (let i = 1; i < qs.keys.length; ++i) {
+        if (qs.keys[i]?.[0] !== firstMarker) {
+          throw new Error('SuperCouch: mixed markers in a single keys batch are not supported (' + firstMarker + ' / ' + qs.keys[i]?.[0] + '). Split the query per marker.');
+        }
+      }
+      return firstMarker === "$SSET" ? 'keys' : 'kv-keys';
+    }
+  }
 
-  // "start_key" and "end_key", used to retrieve a range of value in a single key.
+  // $KV single point lookup via `key` param.
+  const singleKey = (qs as any).key;
+  if (singleKey && Array.isArray(singleKey) && singleKey[0] === "$KV")
+    return 'kv-keys';
+
+  // $KV range queries are explicitly unsupported.
   const startKey = qs.start_key || qs.startkey;
-  const endKey = qs.end_key || qs.endkey;
+  const endKey   = qs.end_key   || qs.endkey;
+  if ((startKey && startKey[0] === "$KV") || (endKey && endKey[0] === "$KV")) {
+    throw new Error('$KV: range queries not supported (use $SSET or a CouchDB view)');
+  }
+
+  // $SSET range (unchanged)
   if (startKey && startKey[0] === "$SSET" && endKey) {
     if (startKey.length !== endKey.length) return null;
 
@@ -245,6 +339,46 @@ async function processKeysQuery<V, D>(sSetDB: SSetDB, keys: string[][], options:
       score: kr.row.score,
     })),
   };
+}
+
+async function processKVKeysQuery<V, D>(
+  kvDB: KVDB,
+  keys: string[][],
+  options: { includeExpiresAt: boolean },
+): Promise<DocumentViewResponse<V, D>> {
+  if (!keys.length) return { offset: 0, total_rows: 0, rows: [] };
+
+  // Group keys by db so each mget stays on a single Redis cluster slot.
+  // Preserve the original index so output aligns with the request order.
+  const groups = new Map<string, { index: number; id: string[] }[]>();
+  keys.forEach((k, index) => {
+    if (k[0] !== '$KV' || k.length < 3) {
+      throw new Error('$KV: invalid key in batch — ' + JSON.stringify(k));
+    }
+    const db = k[1];
+    const id = k.slice(2) as string[];
+    if (!groups.has(db)) groups.set(db, []);
+    groups.get(db)!.push({ index, id });
+  });
+
+  const rowByIndex: (any | null)[] = new Array(keys.length).fill(null);
+  await Promise.all(Array.from(groups.entries()).map(async ([db, items]) => {
+    const entries = await kvDB.mget<V>(db, items.map(it => it.id), options);
+    entries.forEach((entry, i) => {
+      if (!entry) return;
+      const { index } = items[i];
+      const row: any = {
+        id: '$KV',
+        key: keys[index] as unknown as string, // nano's typing expects string; this matches the $SSET path
+        value: entry.value,
+      };
+      if (entry.expiresAt !== undefined) row.expiresAt = entry.expiresAt;
+      rowByIndex[index] = row;
+    });
+  }));
+
+  const rows = rowByIndex.filter((r): r is NonNullable<typeof r> => r !== null);
+  return { offset: 0, total_rows: keys.length, rows };
 }
 
 async function processRangeQuery<V, D>(sSetDB: SSetDB, startKey: [...string[], number], endKey: [...string[], number], options: QueryOptions, skip?: number, limit?: number, descending?: boolean): Promise<DocumentViewResponse<V, D>> {
