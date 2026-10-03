@@ -75,7 +75,10 @@ export class SSetRedis implements SSetDB {
     }
     const promises: Promise<any>[] = Object.keys(groups).map(db => {
       let multi = this.redisClient.multi();
-      for (let op of ops) {
+      // In Redis Cluster, a MULTI may only touch keys within one hash slot. Keys are
+      // '{SSET:<db>}/...' so all ops of a group share the same hash tag: iterate only
+      // the ops of this db's group, not the whole batch.
+      for (let op of groups[db]) {
         const key = SSetRedis.key(op.db, op.id);
         const score = op.score;
         const value = JSON.stringify(op.value);
