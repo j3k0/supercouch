@@ -96,9 +96,11 @@ describe('KVRedis.process — silent skip when expiresAt in the past', () => {
   let redisClient: RedisClientType;
   beforeEach(() => { redisClient = td.object<RedisClientType>() as RedisClientType; });
 
-  it('silently skips an op with expiresAt in the past — no MULTI created', async () => {
-    // When every op is expired, process() should NOT start a MULTI.
-    // This matters operationally: re-indexes replay millions of past ops.
+  it('silently skips an op with expiresAt in the past — no commands queued, no exec', async () => {
+    // When every op is expired, PROCESS never queues a SET nor calls exec().
+    // The multi() object itself gets created (that's unavoidable with the
+    // fluent API) but stays empty. This matters operationally: re-indexes
+    // replay millions of past ops.
     const pastMulti = buildMulti();
     td.when((redisClient as any).multi()).thenReturn(pastMulti);
 
@@ -198,11 +200,34 @@ describe('KVRedis.process — validation errors', () => {
     );
   });
 
-  it('throws when expiresAt is non-integer', async () => {
+  it('floors fractional expiresAt to the whole second', async () => {
+    // Common emitter pattern: Date.now() / 1000 + ttl, which yields a
+    // fractional value. This must be floored, not rejected — throwing would
+    // wedge the CouchDB view indexer in a retry loop.
+    const multi = buildMulti();
+    td.when((redisClient as any).multi()).thenReturn(multi);
+
     const kv = new KVRedis(redisClient);
-    await assert.rejects(
-      () => kv.process([{ db: 'mydb', id: ['x'], value: 1, expiresAt: 1_700_000_000.5 }]),
-      /invalid expiresAt/,
-    );
+    const nowSec = Math.floor(Date.now() / 1000);
+    await kv.process([{ db: 'mydb', id: ['abc'], value: 1, expiresAt: nowSec + 3600.5 }]);
+
+    assert.strictEqual((multi as any).calls.length, 1);
+    // EX = Math.floor(now + 3600.5) - now = 3600 (±1s for clock drift between
+    // the test's nowSec and process()'s internal Date.now()).
+    const ex = (multi as any).calls[0].opts?.EX;
+    assert.ok(ex >= 3599 && ex <= 3600, `EX should be 3600 after flooring, got ${ex}`);
+  });
+
+  it('silently skips a fractional expiresAt that floors to <= now', async () => {
+    // now + 0.4 floors to now, which is already past at write time.
+    const multi = buildMulti();
+    td.when((redisClient as any).multi()).thenReturn(multi);
+
+    const kv = new KVRedis(redisClient);
+    const nowSec = Math.floor(Date.now() / 1000);
+    await kv.process([{ db: 'mydb', id: ['x'], value: 1, expiresAt: nowSec + 0.4 }]);
+
+    assert.strictEqual((multi as any).calls.length, 0);
+    td.verify((multi as any).exec(), { times: 0 });
   });
 });
