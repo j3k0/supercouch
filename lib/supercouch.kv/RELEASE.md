@@ -26,12 +26,24 @@ The following steps from the initial release were already executed:
    No `supercouch.nano` republish is needed: its `^0.1.0` ranges resolve to
    0.1.1 automatically.
 
-3. Tag the top-level repo and push:
+3. Refresh the top-level lockfile so 0.1.1 is recorded.
+
+   Until now the lockfile records `supercouch.kv@0.1.0` / `supercouch.kv.redis@0.1.0`
+   — 0.1.1 could not be recorded before being published. If the deployment
+   uses `npm ci` (lockfile-strict), it would install 0.1.0 and undo the
+   fractional-`expiresAt` fix. So, once both 0.1.1 packages are on npm:
+   ```
+   npm install   # at the repo root; lockfile then records the 0.1.1s
+   git add package-lock.json
+   git commit -m "(dev) Lockfile: bump supercouch.kv(.redis) to 0.1.1"
+   ```
+
+4. Tag the top-level repo and push:
    ```
    git tag v1.1.0 && git push --tags
    ```
 
-4. Deploy with the Ansible playbook `iapster/couchdb/supercouch.yml`:
+5. Deploy with the Ansible playbook `iapster/couchdb/supercouch.yml`:
    ```
    serial: 1  # one CouchDB node at a time
    ```
