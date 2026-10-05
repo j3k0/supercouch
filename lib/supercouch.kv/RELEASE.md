@@ -33,14 +33,18 @@ The following steps from the initial release were already executed:
    uses `npm ci` (lockfile-strict), it would install 0.1.0 and undo the
    fractional-`expiresAt` fix. So, once both 0.1.1 packages are on npm:
    ```
-   npm install   # at the repo root; lockfile then records the 0.1.1s
+   npm update supercouch.kv supercouch.kv.redis --lockfile-version 2
+   # (plain `npm install` keeps 0.1.0 since it already satisfies ^0.1.0)
    git add package-lock.json
    git commit -m "(dev) Lockfile: bump supercouch.kv(.redis) to 0.1.1"
    ```
 
-4. Tag the top-level repo and push:
+4. Bump the top-level `package.json` to 1.1.1, tag and push.
+
+   `v1.1.0` already exists (Jun 1, PR #2 merge, shipping `supercouch.kv@0.1.0`)
+   and must not be moved — the review fixes ship as the 1.1.1 patch release:
    ```
-   git tag v1.1.0 && git push --tags
+   git tag -a v1.1.1 -m "supercouch.qs 1.1.1" && git push origin master v1.1.1
    ```
 
 5. Deploy with the Ansible playbook `iapster/couchdb/supercouch.yml`:
@@ -48,7 +52,9 @@ The following steps from the initial release were already executed:
    serial: 1  # one CouchDB node at a time
    ```
    After each node restarts, verify `/opt/supercouch/package.json` shows
-   version 1.1.0. Only after ALL nodes run 1.1.0+ may any dDoc emit $KV.
+   version 1.1.1. Only after ALL nodes run 1.1.1+ may any dDoc emit $KV
+   (nodes already on 1.1.0 must be upgraded too: 1.1.0 ships the throwing
+   `supercouch.kv@0.1.0`).
 
 Note: the deployed binary must get `supercouch.kv@>=0.1.1` (verify with
 `npm ls supercouch.kv` on a node) — 0.1.0 rejects fractional `expiresAt`,
