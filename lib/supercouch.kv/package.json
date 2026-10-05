@@ -1,6 +1,6 @@
 {
   "name": "supercouch.kv",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "SuperCouch Key-Value database interface (single-valued, optional TTL)",
   "main": "dist/index.js",
   "types": "./dist/index.d.ts",

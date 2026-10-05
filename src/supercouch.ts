@@ -383,6 +383,11 @@ async function mapDoc(map: Function, doc: object): Promise<any[]> {
           shouldEmit = config.emitSSet;
         }
       } else if (marker === KV_KEY && kv[1] != null && typeof kv[1] === 'object') {
+        // Unlike the $SSET branch above — where only validated ops flip the flag
+        // — shouldEmit is set here unconditionally: an emit with a falsy "db" is
+        // not pushed to Redis but still lands in the view when --emit-kv is on,
+        // so a --emit-sset and --emit-kv rebuild catch slightly different
+        // malformed input. Flag-off callers see no difference (both drop it).
         shouldEmit = config.emitKV;
         const { value, expiresAt } = kv[1];
         if (db) {

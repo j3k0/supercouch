@@ -33,12 +33,16 @@ export class KVRedis implements KVDB {
       if (!op.id || !op.id.length) {
         throw new Error('Invalid $KV operation: missing id — ' + JSON.stringify(op));
       }
-      if (op.expiresAt !== undefined &&
-          (typeof op.expiresAt !== 'number' ||
-           !isFinite(op.expiresAt) ||
-           op.expiresAt < 0 ||
-           !Number.isInteger(op.expiresAt))) {
-        throw new Error('Invalid $KV operation: invalid expiresAt — ' + JSON.stringify(op));
+      if (op.expiresAt !== undefined) {
+        // NaN, non-finite, negative or non-number values are emitter bugs that
+        // should surface loudly. Fractional values, on the other hand, are a
+        // natural byproduct of the common `Date.now() / 1000 + ttl` emitter
+        // pattern: flooring them to the whole second instead of throwing avoids
+        // wedging the whole view indexer on a harmless rounding difference.
+        if (typeof op.expiresAt !== 'number' || !isFinite(op.expiresAt) || op.expiresAt < 0) {
+          throw new Error('Invalid $KV operation: invalid expiresAt — ' + JSON.stringify(op));
+        }
+        op.expiresAt = Math.floor(op.expiresAt);
       }
       if (!groups[op.db]) groups[op.db] = [];
       groups[op.db].push(op);

@@ -20,7 +20,7 @@ This spec covers only the SuperCouch-side additions needed to make that possible
 
 - **Write.** A document's map function emits a key starting with `"$KV"` and a value payload `{ value, expiresAt? }`. SuperCouch stores the value at that key.
 - **Single value per key.** If the same key is emitted from two different documents, behavior at the indexing layer is **undefined** (last-write-wins in the current Redis backend, but callers must not rely on it).
-- **TTL.** If `expiresAt` (unix seconds) is provided and in the future, the key is readable until that instant, then gone.
+- **TTL.** If `expiresAt` (unix seconds) is provided and in the future, the key is readable until that instant, then gone. Fractional values are floored to the whole second; NaN, non-finite, negative or non-number values are emitter bugs that surface as a loud error (which wedges indexing on that batch — emitters must be careful).
 - **Persistent.** If `expiresAt` is absent, the key persists until overwritten.
 - **Already-expired is a no-op.** If `expiresAt` is at or before "now" at indexing time, the emit is silently skipped (no key written, no log entry). The contract "value exists until `expiresAt`" is honored by not writing a key whose lifetime is already zero. This matters operationally: full re-indexes of an events database will replay millions of long-past REQUEST_CONTENT emits; logging them would be catastrophic and writing them would create garbage that Redis immediately purges.
 - **Read.** Callers retrieve a value via `db.view(ddoc, view, { key: ["$KV", db, ...id], limit: 1 })` or, for batch lookups, `{ keys: [...] }`. Zero or one logical value is returned per key. Missing and expired keys are treated identically: the row is simply not in the response.
@@ -164,6 +164,12 @@ async process<T>(ops: KVOp<T>[]): Promise<void> {
          op.expiresAt < 0)) {
       throw new Error('Invalid $KV operation: invalid expiresAt — ' + JSON.stringify(op));
     }
+    // REVIEW REVISION: fractional expiresAt is floored to the whole second
+    // instead of being rejected. The common `Date.now() / 1000 + ttl` emitter
+    // pattern yields fractional values; throwing on them would wedge the
+    // CouchDB view indexer in a retry loop over a harmless rounding
+    // difference. (NaN / non-finite / negative / non-number still throw.)
+    if (op.expiresAt !== undefined) op.expiresAt = Math.floor(op.expiresAt);
     (groups[op.db] ??= []).push(op);
   }
 
@@ -427,7 +433,7 @@ async function processKVKeysQuery<V, D>(
   }));
 
   const rows = rowByIndex.filter((r): r is NonNullable<typeof r> => r !== null);
-  return { offset: 0, total_rows: rows.length, rows };
+  return { offset: 0, total_rows: keys.length, rows }; // REVIEW REVISION: keys.length (not rows.length) — matches the $SSET processKeysQuery behavior
 }
 ```
 
@@ -490,7 +496,8 @@ db.view(..., { startkey: ["$KV", ...], endkey: ["$KV", ...] })
 | Situation | Handling |
 |---|---|
 | Emit with `expiresAt` at or before "now" | Silent skip (per contract). No log. No error. |
-| Emit with invalid `expiresAt` (NaN, non-finite, negative, wrong type) | Throw at `KVRedis.process()`. Batch does not partially apply. Same posture as `SSetRedis` throwing on missing `id`/`keep`. |
+| Emit with invalid `expiresAt` (NaN, non-finite, negative, wrong type) | Throw at `KVRedis.process()`. Batch does not partially apply. Same posture as `SSetRedis` throwing on missing `id`/`keep`. REVIEW REVISION: fractional (but finite, non-negative) values are **floored** to the whole second instead of thrown — see the `process()` pseudocode above — because the common `Date.now() / 1000 + ttl` emitter pattern naturally produces fractions. |
+| Emit with `value` undefined (or a non-object payload, e.g. an emit whose second element is `5`, not an emit object) | Silently ignored at the query-server/emitter layer (treated as a normal view row, never sent to Redis). A structured `undefined` `value` reaching `KVRedis.process()` throws — `JSON.stringify(undefined)` is not a storable string. |
 | Emit with missing `id` / empty `id` array | Throw (same as SSet). |
 | Redis unavailable during `process()` | Rejected promise propagates up through `mapDoc()` → CouchDB retries the indexing task (existing SSet behavior; `$KV` inherits). |
 | Redis unavailable during `get` / `mget` | Rejected promise propagates to the `db.view()` caller, who handles it like any other view error. |
@@ -513,6 +520,8 @@ Unit tests colocate with each package (`lib/supercouch.kv.redis/test/`), matchin
    - Write with `expiresAt <= now` → no key written, no error, no log.
    - Batch across multiple `db`s → all apply.
    - Invalid `expiresAt` (NaN, negative, non-number) → throws; batch does not partially apply (the MULTI for that db was never started).
+   - Fractional `expiresAt` → floored to the whole second, not rejected (see review revision above).
+   - `value` === `undefined` → throws.
    - Missing / empty `id` → throws.
 2. **`get`**
    - Hit with persistent key → `{value}`, no `expiresAt`.
@@ -529,6 +538,12 @@ Unit tests colocate with each package (`lib/supercouch.kv.redis/test/`), matchin
    - `$KV` and `$SSET` with identical `(db, id)` do not collide (write to each, read from each; neither sees the other).
 
 **Query server (`src/supercouch.ts`) coverage:**
+
+Note (review revision): the query server has no test infrastructure — the
+`$SSET` path in `src/supercouch.ts` is equally untested — so the items below
+are aspirational and unimplemented. The behavioral coverage is achieved via
+unit tests in `lib/supercouch.kv.redis/test/` and the client layer in
+`lib/supercouch.nano/test/`.
 
 - A dDoc emitting both `$SSET` and `$KV` from one `map_doc` → both backends receive their respective ops; remaining rows returned to CouchDB.
 - `$KV` emit with `expiresAt` in the past → silently skipped, no row returned, no error.
@@ -551,7 +566,9 @@ The query server protocol has no capability negotiation. An old supercouch binar
 
 **Rollout order is mandatory:**
 
-1. Publish `supercouch.kv@0.1.0` and `supercouch.kv.redis@0.1.0` to npm.
+1. Publish `supercouch.kv@0.1.0` and `supercouch.kv.redis@0.1.0` to npm. (Done for
+   0.1.0; see REVIEW REVISION in the `process()` pseudocode — a follow-up 0.1.1
+   publishes the floor-fractional-`expiresAt` fix. See `lib/supercouch.kv/RELEASE.md`.)
 2. Bump top-level `supercouch` to `1.1.0`, update `package.json` to depend on the two new packages, build, tag `v1.1.0`, push.
 3. Run the Ansible playbook (`iapster/couchdb/supercouch.yml`) — `serial: 1` brings each CouchDB node to the new binary, with `service couchdb restart` after each.
 4. **Only after all nodes run v1.1.0+**, deploy any dDoc that emits `$KV`.

@@ -101,7 +101,10 @@ export interface SSetEmit<V> {
 export interface KVEmit<V> {
   key: readonly ["$KV", string, ...(string | number)[]];
   value: V;
-  /** Optional absolute expiry in unix seconds. */
+  /** Optional absolute expiry in unix seconds.
+   *
+   * Fractional values are floored to the whole second by the write backend.
+   * A value at or before the indexing time makes the write a silent no-op. */
   expiresAt?: number;
 }
 

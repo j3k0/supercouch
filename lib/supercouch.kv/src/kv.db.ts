@@ -12,9 +12,13 @@ export interface KVDB {
    * Apply a batch of KV write operations.
    *
    * Ops whose expiresAt is <= now at invocation time are silently skipped
-   * (contract: "already-expired is a no-op"). Ops with a malformed expiresAt
-   * (NaN, non-finite, negative, wrong type) or a missing id throw — these are
-   * emitter bugs and should surface loudly.
+   * (contract: "already-expired is a no-op"). Fractional expiresAt values
+   * are floored to the whole second — the common `Date.now() / 1000 + ttl`
+   * emitter pattern yields fractional values, and flooring them avoids
+   * wedging the view indexer (an actual reject only happens on genuinely
+   * malformed input: NaN, non-finite, negative, wrong type, or a missing id).
+   * These surface loudly: batch validation runs before any write, so a
+   * rejection never leaves the batch partially applied.
    *
    * Resolves when all surviving writes have been acknowledged by the backend.
    * Rejects if the backend is unavailable; the caller (typically the query
@@ -61,7 +65,8 @@ export type KVOp<T> = {
   /** The payload. JSON-serialized on write, JSON-parsed on read. */
   value: T;
 
-  /** Absolute expiry, in unix seconds. Optional. */
+  /** Absolute expiry, in unix seconds. Optional. Fractional values are
+   *  floored to the whole second on write. */
   expiresAt?: number;
 };
 
