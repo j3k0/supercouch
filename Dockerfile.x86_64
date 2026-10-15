@@ -1,0 +1,44 @@
+# A couchdb server with the supercouch extension installed (x86_64 build)
+
+# Check dockerhub for the latest
+FROM apache/couchdb:3.4.2
+
+# Check nodejs.org for the latest
+ARG NODE_VERSION=v16.14.2
+
+# For aarch64, use arm64; for x86_64, use x64
+ARG NODE_ARCH=x64
+
+# Install GCC
+RUN \
+  apt-get update \
+  && apt-get install -y \
+    gcc \
+  && rm -fr /var/lib/apt/lists/* /var/lib/dpkg/info/*
+
+# Install NodeJS
+RUN \
+  curl https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-${NODE_ARCH}.tar.gz -o /node.tar.gz \
+  && cd / \
+  && tar xzf node.tar.gz \
+  && rm -fr node.tar.gz \
+  && mv node-* /opt/node \
+  && mkdir -p /opt/supercouch
+
+ENV PATH=/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Build supercouch
+COPY package.json package-lock.json /opt/supercouch/
+RUN cd /opt/supercouch && /opt/node/bin/npm install
+
+COPY bin /opt/supercouch/bin
+COPY tsconfig.json /opt/supercouch/tsconfig.json
+COPY src /opt/supercouch/src
+
+RUN cd /opt/supercouch/ && /opt/node/bin/npm run build
+
+# Define how to connect to the relax.sset database
+ENV REDIS_RELAX_SSET_URL="redis://redis:6379"
+
+# Define supercouch as the queryserver for "supercouch" files.
+ENV COUCHDB_QUERY_SERVER_SUPERCOUCH="/opt/supercouch/bin/supercouch"
