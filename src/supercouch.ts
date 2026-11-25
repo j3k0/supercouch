@@ -18,6 +18,13 @@ import { redact, redactLine } from './log-redact';
 const SSET_KEY = '$SSET';
 const KV_KEY = '$KV';
 
+/**
+ * How much of a raw input line is echoed to the log or back to CouchDB on the
+ * error paths. Short enough to stay well under the redaction scrub cap, long
+ * enough to identify the offending line.
+ */
+const ECHO_LENGTH = 512;
+
 /*
  * Types
  */
@@ -159,7 +166,7 @@ async function main(argv: string[]) {
   const pipe = readline.createInterface({ input: stdin, output: stdout });
   pipe.on("line", async function lineReceived(input: string): Promise<void> {
     if (config.debug) {
-      superLog(LogLevel.DEBUG, 'line: ' + redactLine(input));
+      superLog(LogLevel.DEBUG, 'line: ' + echoForLog(input));
     }
     if (/^[ \t\n]*$/.test(input)) return;
     let dataLine: string[] = [];
@@ -169,8 +176,8 @@ async function main(argv: string[]) {
     }
     catch (err) {
       if (err instanceof Error) {
-    superLog(LogLevel.ERROR, 'parse error: ' + err.message + " input: \"" + redactLine(input) + "\"")
-    respond(["error", "parse_error", err.message + " input: \"" + redactLine(input) + "\""]);
+        superLog(LogLevel.ERROR, 'parse error: ' + err.message + " input: \"" + echoForLog(input) + "\"")
+        respond(["error", "parse_error", err.message + " input: \"" + echoForLog(input) + "\""]);
       }
       else {
         superLog(LogLevel.ERROR, "unknown error...");
@@ -306,6 +313,19 @@ global.emit = function (key, value) {
     emits.push([['' + key], value]);
   else if (key?.length) // array, hopefully
     emits.push([key, value]);
+}
+
+/**
+ * Build the diagnostic echo of a raw input line.
+ *
+ * The echo goes to the log and, for a parse error, back to CouchDB. A line over
+ * the scrub cap would otherwise be echoed unredacted — and an oversized line is
+ * exactly what a truncated or corrupted document produces. Truncating first
+ * keeps the echo short enough for the scrub to run, so a credential in the
+ * fragment is still removed.
+ */
+function echoForLog(input: string): string {
+  return redactLine(input.slice(0, ECHO_LENGTH));
 }
 
 function superLog(level: LogLevel, str: string) {

@@ -101,9 +101,11 @@ test('CouchDB replies are not redacted, logs are', async t => {
   };
   // A map function emitting the whole record as a $KV value, like the README's
   // `value: doc.user` example. The secret sits under a deny-listed key name.
+  // The database name is namespaced so a rerun against a shared Redis cannot
+  // clobber real data.
   // --emit-kv makes that value flow back out on stdout, which is the path a
   // rebuild of Redis uses.
-  const mapFn = 'function map(doc){ if (doc.type === "unit") emit(["$KV","unitdb","unitid"], '
+  const mapFn = 'function map(doc){ if (doc.type === "unit") emit(["$KV","it:unitdb","it:unitid"], '
     + '{ value: doc.user, expiresAt: 0 }); }';
 
   const lines = [
@@ -122,4 +124,22 @@ test('CouchDB replies are not redacted, logs are', async t => {
   // The log must not carry it, on any path (debug line dump included).
   assert.ok(log.length > 0, 'log file was written');
   assert.ok(!log.includes(SECRET), 'log file carries no secret');
+});
+
+test('an oversized malformed line is truncated before it is echoed', async t => {
+  if (!await canConnect(redisPort())) {
+    t.skip(`no redis at ${REDIS_URL}`);
+    return;
+  }
+  // A truncated document over the scrub cap: the JSON path fails, and the raw
+  // echo to the log and to CouchDB must not carry the secret. The echo is
+  // truncated first, which keeps it inside the scrub.
+  const oversized = '{"_id":"unit-big","token":"' + SECRET + '","padding":"'
+    + 'x'.repeat(70 * 1024);
+
+  const { stdout, log } = await runServer([oversized]);
+
+  assert.ok(!log.includes(SECRET), 'log file carries no secret');
+  assert.ok(!stdout.includes(SECRET), 'error reply carries no secret');
+  assert.ok(stdout.includes('parse_error'), 'still reports the parse error');
 });
