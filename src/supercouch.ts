@@ -122,7 +122,12 @@ function respond(outputObj: any) {
   // ensure it's valid JSON
   let output: string | undefined;
   try {
-    output = JSON.stringify(redact(outputObj));
+    // NOT redacted on purpose: this is the CouchDB query-server protocol
+    // channel, not a log stream. Redacting here would make view rows differ
+    // from what was written to Redis (and corrupt a --emit-sset/--emit-kv
+    // rebuild). The `output:` debug line below is a log and is redacted by
+    // the superLog choke point.
+    output = JSON.stringify(outputObj);
     if (config.debug) {
       superLog(LogLevel.DEBUG, 'output: ' + output);
     }
@@ -131,7 +136,7 @@ function respond(outputObj: any) {
   catch (err) {
     superLog(LogLevel.ERROR, 'Provided output is incorrect');
     superLog(LogLevel.ERROR, 'output: ' + (output ? redactLine(output) : '<<< undefined >>>'));
-    console.log(JSON.stringify(["error", "output_error", (output || '<<< undefined >>>')]));
+    console.log(JSON.stringify(["error", "output_error", (output ? redactLine(output) : '<<< undefined >>>')]));
   }
 }
 
@@ -164,8 +169,8 @@ async function main(argv: string[]) {
     }
     catch (err) {
       if (err instanceof Error) {
-        superLog(LogLevel.ERROR, 'parse error: ' + err.message + " input: \"" + input + "\"")
-        respond(["error", "parse_error", err.message + " input: \"" + redactLine(input) + "\""]);
+    superLog(LogLevel.ERROR, 'parse error: ' + err.message + " input: \"" + redactLine(input) + "\"")
+    respond(["error", "parse_error", err.message + " input: \"" + redactLine(input) + "\""]);
       }
       else {
         superLog(LogLevel.ERROR, "unknown error...");

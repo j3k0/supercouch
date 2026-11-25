@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node -r source-map-support/register -r module-alias/register build/supercouch.js",
     "build": "tsc",
-    "buildw": "tsc -w"
+    "buildw": "tsc -w",
+    "test": "tsc && node --test test/"
   },
   "author": "Jean-Christophe Hoelt <hoelt@fovea.cc>",
   "license": "MIT",
