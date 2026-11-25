@@ -13,9 +13,17 @@ interface SyslogClient { log: (message: string, level?: number) => void; }
 
 import { createRedisClientOrCluster  } from 'redis-cluster-url';
 import { md5 } from './md5';
+import { redact, redactLine } from './log-redact';
 
 const SSET_KEY = '$SSET';
 const KV_KEY = '$KV';
+
+/**
+ * How much of a raw input line is echoed to the log or back to CouchDB on the
+ * error paths. Short enough to stay well under the redaction scrub cap, long
+ * enough to identify the offending line.
+ */
+const ECHO_LENGTH = 512;
 
 /*
  * Types
@@ -121,6 +129,11 @@ function respond(outputObj: any) {
   // ensure it's valid JSON
   let output: string | undefined;
   try {
+    // NOT redacted on purpose: this is the CouchDB query-server protocol
+    // channel, not a log stream. Redacting here would make view rows differ
+    // from what was written to Redis (and corrupt a --emit-sset/--emit-kv
+    // rebuild). The `output:` debug line below is a log and is redacted by
+    // the superLog choke point.
     output = JSON.stringify(outputObj);
     if (config.debug) {
       superLog(LogLevel.DEBUG, 'output: ' + output);
@@ -129,8 +142,8 @@ function respond(outputObj: any) {
   }
   catch (err) {
     superLog(LogLevel.ERROR, 'Provided output is incorrect');
-    superLog(LogLevel.ERROR, 'output: ' + (output || '<<< undefined >>>'));
-    console.log(JSON.stringify(["error", "output_error", (output || '<<< undefined >>>')]));
+    superLog(LogLevel.ERROR, 'output: ' + (output ? redactLine(output) : '<<< undefined >>>'));
+    console.log(JSON.stringify(["error", "output_error", (output ? redactLine(output) : '<<< undefined >>>')]));
   }
 }
 
@@ -153,7 +166,7 @@ async function main(argv: string[]) {
   const pipe = readline.createInterface({ input: stdin, output: stdout });
   pipe.on("line", async function lineReceived(input: string): Promise<void> {
     if (config.debug) {
-      superLog(LogLevel.DEBUG, 'line: ' + input);
+      superLog(LogLevel.DEBUG, 'line: ' + echoForLog(input));
     }
     if (/^[ \t\n]*$/.test(input)) return;
     let dataLine: string[] = [];
@@ -163,8 +176,8 @@ async function main(argv: string[]) {
     }
     catch (err) {
       if (err instanceof Error) {
-        superLog(LogLevel.ERROR, 'parse error: ' + err.message + " input: \"" + input + "\"")
-        respond(["error", "parse_error", err.message + " input: \"" + input + "\""]);
+        superLog(LogLevel.ERROR, 'parse error: ' + err.message + " input: \"" + echoForLog(input) + "\"")
+        respond(["error", "parse_error", err.message + " input: \"" + echoForLog(input) + "\""]);
       }
       else {
         superLog(LogLevel.ERROR, "unknown error...");
@@ -249,12 +262,12 @@ async function processQuery(line: any[]): Promise<any> {
     const err = uErr as unknown as Error;
     const context = {
       command: line[0],
-      args: line.slice(1),
+      args: redact(line.slice(1)),
       timestamp: new Date().toISOString(),
       mapFunctionsCount: mapFunctions?.length || 0,
     };
     superLog(LogLevel.ERROR, `Error context: ${JSON.stringify(context)}`);
-    if (err.message) superLog(LogLevel.ERROR, `Error message: ${err.message}`);
+    if (err.message) superLog(LogLevel.ERROR, `Error message: ${redactLine(err.message)}`);
     if (err.stack) superLog(LogLevel.ERROR, `Stack trace: ${err.stack}`);
     return ["error", "processing_failed", 'message' in err ? err.message : 'unknown message'];
   }
@@ -302,9 +315,26 @@ global.emit = function (key, value) {
     emits.push([key, value]);
 }
 
+/**
+ * Build the diagnostic echo of a raw input line.
+ *
+ * The echo goes to the log and, for a parse error, back to CouchDB. A line over
+ * the scrub cap would otherwise be echoed unredacted — and an oversized line is
+ * exactly what a truncated or corrupted document produces. Truncating first
+ * keeps the echo short enough for the scrub to run, so a credential in the
+ * fragment is still removed.
+ */
+function echoForLog(input: string): string {
+  return redactLine(input.slice(0, ECHO_LENGTH));
+}
+
 function superLog(level: LogLevel, str: string) {
   const lines = str.split('\n');
-  for (const line of lines) {
+  for (const rawLine of lines) {
+    // Never let credentials (private keys, API keys, tokens, passwords…) reach
+    // a log stream: redact every line at the single choke point all outputs
+    // share.
+    const line = redactLine(rawLine);
     if (syslogClient) {
       syslogClient.log(line, SYSLOG_LEVEL[level]); 
     }
@@ -358,7 +388,7 @@ async function mapDoc(map: Function, doc: object): Promise<any[]> {
       timestamp: new Date().toISOString(),
     };
     superLog(LogLevel.ERROR, `Map function error context: ${JSON.stringify(context)}`);
-    if (err.message) superLog(LogLevel.ERROR, `Error message: ${err.message}`);
+    if (err.message) superLog(LogLevel.ERROR, `Error message: ${redactLine(err.message)}`);
     if (err.stack) superLog(LogLevel.ERROR, `Stack trace: ${err.stack}`);
     throw err; // Re-throw to be caught by processQuery
   }
