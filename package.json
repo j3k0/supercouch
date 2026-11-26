@@ -1,13 +1,14 @@
 {
   "name": "supercouch.qs",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "description": "CouchDB Query Server with an SSet Database (cf relax.sset)",
   "main": "build/supercouch.js",
   "scripts": {
     "start": "node -r source-map-support/register -r module-alias/register build/supercouch.js",
     "build": "tsc",
     "buildw": "tsc -w",
-    "test": "tsc && node --test test/*.test.js"
+    "test": "tsc && node --test test/*.test.js",
+    "prepack": "npm run build"
   },
   "author": "Jean-Christophe Hoelt <hoelt@fovea.cc>",
   "license": "MIT",
