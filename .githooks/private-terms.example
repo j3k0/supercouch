@@ -1,0 +1,26 @@
+# Private terms for the public-repo guard — EXAMPLE FILE.
+#
+# Copy to `.githooks/private-terms.txt` and put your own patterns in it. The
+# copy is git-ignored on purpose: it names private things, so it must never be
+# committed here. The committed hook reads whichever file happens to exist.
+#
+# One extended regular expression per line, matched case-insensitively against
+# the commit message and the branch name. `#` starts a comment, blank lines are
+# ignored.
+#
+#   cp .githooks/private-terms.example .githooks/private-terms.txt
+#
+# Then add, one per line:
+#   - the issue-tracker key prefix you use, e.g. `myteam-[0-9]+`
+#   - the names of your private projects, services and repositories
+#   - the paths of private modules that must never be referenced here
+#
+# CI reads the same patterns from a repository secret, so a clone without this
+# file still gets guarded on pull requests.
+
+# Example: an issue tracker with a three-letter prefix.
+# [A-Za-z]{3}-[0-9]+
+
+# Example: private project names and internal module paths.
+# my-private-service
+# (^|[^a-z0-9_-])(billing|validator|dashboard)/

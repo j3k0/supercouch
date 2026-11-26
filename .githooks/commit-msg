@@ -1,0 +1,135 @@
+#!/bin/sh
+#
+# Public-repo guard: refuse a commit or branch name that carries a private
+# reference.
+#
+# Supercouch is a public community project. It is used by companies running it in
+# production, and those deployments naturally have private issue trackers,
+# private repository layouts and customer data. None of that may leak here: the
+# public history, branch names and commit messages are readable by anyone.
+#
+# This file is committed, so it must stay generic — it cannot name the private
+# terms it is looking for. Those live in an optional, git-ignored list read at
+# run time (see TERMS_FILE below), and in CI from a repository secret.
+#
+# What is always checked, with no configuration:
+#   - tracker-style keys: an uppercase prefix, a dash, a number (`ABC-123`)
+#   - credential material: a PEM private key block, a payment-provider style
+#     live/test secret key
+#
+# What is checked when a terms file exists:
+#   - every pattern in it, case-insensitively, against the message and branch
+#
+# Install once per clone:
+#   git config core.hooksPath .githooks
+#   cp .githooks/private-terms.example .githooks/private-terms.txt  # then fill in
+#
+# Set GUARD_SKIP=1 to bypass a genuine false positive. Use it sparingly — a
+# commit message is public forever, and CI runs the same rules on pull requests.
+#
+# Exit status: 0 = clean, 1 = a private reference was found.
+
+set -u
+
+TERMS_FILE="$(dirname "$0")/private-terms.txt"
+
+fail=0
+
+# Print a finding and remember that the commit must be refused.
+# $1: what was scanned, $2: the offending text.
+report() {
+  printf '\n  %s:\n    %s\n' "$1" "$2" >&2
+  fail=1
+  return 0
+}
+
+# Check one string. $1 = what it is, $2 = the text.
+#
+# Every rule below is a grep that fails when it does not match, so a non-zero
+# status is the clean case and must not abort the scan: no `set -e` here.
+check() {
+  what="$1"
+  text="$2"
+
+  # Tracker-style keys. Technical identifiers share the shape, so the usual
+  # ones are exempt: `UTF-8`, `SHA-256`, `AES-256`, `node-18`, `RFC-2119`…
+  # The exemption matches the prefix exactly, so it cannot hide a real key.
+  keys=$(printf '%s' "$text" | grep -Eo '\b[A-Za-z]{2,6}-[0-9]+\b' \
+    | grep -Eiv '^(utf|ucs|sha|md|hmac|aes|rsa|ecdsa|dsa|tls|ssl|http|https|iso|ansi|rfc|ieee|node|npm|es|ecma|base|semver|php|py|jdk|win|osx|macos|arm|amd|x|v)-[0-9]+$' \
+    | head -3 | tr '\n' ' ' || true)
+  if [ -n "$keys" ]; then
+    # Uppercase-only keys are safe to flag with no configuration. A lowercase
+    # one is usually a branch name, so leave that to the terms file: ordinary
+    # words with a year (`data-2024`) share the shape.
+    upper=$(printf '%s' "$keys" | tr ' ' '\n' | grep -E '^[A-Z]' | tr '\n' ' ' || true)
+    if [ -n "$upper" ]; then
+      report "$what carries a tracker-style key" "$upper"
+    fi
+  fi
+
+  # Credential material, whatever the repository.
+  secrets=$(printf '%s' "$text" \
+    | grep -Eo 'BEGIN [A-Z ]*PRIVATE KEY|sk_(live|test)_[A-Za-z0-9]{8,}|AKIA[0-9A-Z]{12,}' \
+    | head -2 | tr '\n' ' ' || true)
+  if [ -n "$secrets" ]; then
+    report "$what may embed a credential" "$secrets"
+  fi
+
+  # The caller's own private terms, when the local list is present.
+  if [ -f "$TERMS_FILE" ]; then
+    while IFS= read -r term; do
+      case "$term" in
+        ''|'#'*) continue ;;
+      esac
+      hit=$(printf '%s' "$text" | grep -Eoi -- "$term" | head -3 | tr '\n' ' ' || true)
+      if [ -n "$hit" ]; then
+        report "$what matches a private term" "$hit"
+      fi
+    done < "$TERMS_FILE"
+  fi
+
+  return 0
+}
+
+if [ "${GUARD_SKIP:-0}" = "1" ]; then
+  echo "public-repo guard: skipped (GUARD_SKIP=1)" >&2
+  exit 0
+fi
+
+# --- commit message -------------------------------------------------------
+msg_file="${1:-}"
+if [ -n "$msg_file" ] && [ -f "$msg_file" ]; then
+  # Drop the comment lines git itself ignores.
+  message=$(grep -v '^#' "$msg_file" || true)
+  if [ -n "$message" ]; then check "commit message" "$message"; fi
+fi
+
+# --- branch name ----------------------------------------------------------
+branch=$(git symbolic-ref --short -q HEAD || true)
+if [ -n "$branch" ]; then check "branch name ($branch)" "$branch"; fi
+
+if [ "$fail" != "0" ]; then
+  cat >&2 <<'EOF'
+
+public-repo guard: this commit was not created.
+
+Supercouch is a public project. Commit messages and branch names are public
+forever, so they must not carry a private issue-tracker key, a private project
+or company name, an internal repository path, customer data, or a credential.
+
+Reword the message (and rename the branch if it was flagged), then retry:
+
+  git commit --amend -m "…"
+  git branch -m <new-name>
+
+If this is a genuine false positive, re-run with:
+
+  GUARD_SKIP=1 git commit …
+
+Finally, check that the change itself does not leak either: the same rules run
+on pull requests in CI.
+EOF
+  exit 1
+fi
+
+exit 0

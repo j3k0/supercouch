@@ -1,2 +1,8 @@
 /lib/
 /.claude/
+
+# Local-only files: never published.
+/AGENTS.md
+/CLAUDE.md
+/.githooks/
+/.github/

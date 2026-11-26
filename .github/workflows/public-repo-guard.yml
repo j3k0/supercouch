@@ -1,0 +1,80 @@
+# Public-repo guard.
+#
+# Supercouch is a public community project. This workflow fails a pull request
+# whose commit messages or branch name carry a private reference, so the rule
+# also holds for clones that never installed the local hook.
+#
+# The generic shapes (tracker-style keys, credential material) are checked by
+# `.githooks/commit-msg`, which this workflow runs. The organisation's own
+# private terms — project names, module paths, tracker prefixes — come from the
+# PRIVATE_TERMS repository secret, one extended regular expression per line, so
+# this public file never names them.
+
+name: public-repo guard
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  no-private-references:
+    runs-on: ubuntu-latest
+    env:
+      PRIVATE_TERMS: ${{ secrets.PRIVATE_TERMS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: every commit in the pull request is checked, not only
+          # the pushed tip.
+          fetch-depth: 0
+
+      - name: Install the private terms from the repository secret
+        run: |
+          if [ -n "${PRIVATE_TERMS:-}" ]; then
+            printf '%s\n' "$PRIVATE_TERMS" > .githooks/private-terms.txt
+            echo "Loaded $(wc -l < .githooks/private-terms.txt) private term line(s)."
+          else
+            echo "::warning::PRIVATE_TERMS is not set; only the generic shapes are checked."
+          fi
+
+      - name: Check every commit message in this change
+        run: |
+          set -eu
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          else
+            range="${{ github.event.before }}..${{ github.sha }}"
+          fi
+          # A brand-new branch reports an all-zero "before": check its tip only.
+          case "$range" in
+            0000000000000000000000000000000000000000..*) range="${{ github.sha }}" ;;
+          esac
+          # The hook checks the current branch name too, which in CI is the
+          # Actions branch (often `HEAD`). Detach so only the message is judged.
+          git checkout -q --detach
+          status=0
+          for sha in $(git rev-list "$range"); do
+            git log -1 --format=%B "$sha" > /tmp/commit-message.txt
+            echo "Checking $(git log -1 --format='%h %s' "$sha")"
+            if ! sh .githooks/commit-msg /tmp/commit-message.txt; then status=1; fi
+          done
+          if [ "$status" != "0" ]; then
+            echo "::error::A commit message carries a private reference. See the output above."
+            exit 1
+          fi
+
+      - name: Check the branch name
+        if: github.event_name == 'pull_request'
+        run: |
+          set -eu
+          # The hook checks the text it is given; here that text is the branch
+          # name, so the same rules apply to it.
+          printf 'branch name %s\n' "${{ github.head_ref }}" > /tmp/branch-name.txt
+          if ! sh .githooks/commit-msg /tmp/branch-name.txt; then
+            echo "::error::The branch name carries a private reference: ${{ github.head_ref }}"
+            exit 1
+          fi

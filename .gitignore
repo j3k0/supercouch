@@ -1,2 +1,9 @@
 /node_modules/
 /build/
+
+# Local-only files: never committed here.
+# Private deny-list for the public-repo guard.
+/.githooks/private-terms.txt
+# Local agent instructions.
+/AGENTS.md
+/CLAUDE.md
