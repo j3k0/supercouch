@@ -69,12 +69,19 @@ jobs:
 
       - name: Check the branch name
         if: github.event_name == 'pull_request'
+        # The branch name is attacker-controlled text (anyone can open a pull
+        # request from a branch they named). Pass it through the environment so
+        # the shell receives it as data: writing `${{ github.head_ref }}` into
+        # the script body instead would let a branch name such as
+        # `x";curl …|sh;"` run as a command.
+        env:
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           set -eu
           # The hook checks the text it is given; here that text is the branch
           # name, so the same rules apply to it.
-          printf 'branch name %s\n' "${{ github.head_ref }}" > /tmp/branch-name.txt
+          printf 'branch name %s\n' "$HEAD_REF" > /tmp/branch-name.txt
           if ! sh .githooks/commit-msg /tmp/branch-name.txt; then
-            echo "::error::The branch name carries a private reference: ${{ github.head_ref }}"
+            printf '::error::The branch name carries a private reference: %s\n' "$HEAD_REF"
             exit 1
           fi
